@@ -167,6 +167,19 @@ grep -q "WorkingDirectory=$(readlink -f "$origin")\$" \
   "$XDG_CONFIG_HOME/systemd/user/smoked.service" \
   || fail "smoke: --cwd . did not capture gen-time cwd"
 
+# Relative --env-file/--config resolve the same way (systemd wants
+# absolute paths in EnvironmentFile=/PathChanged=)
+(cd "$origin" && "$samosbor" gen --name smoked --repo "$origin" \
+  --build-cmd 'sh build.sh' --bin smoked \
+  --env-file env.conf --config app.toml 2>/dev/null)
+oreal=$(readlink -f "$origin")
+grep -q "EnvironmentFile=$oreal/env.conf\$" \
+  "$XDG_CONFIG_HOME/systemd/user/smoked.service" \
+  || fail "smoke: relative --env-file not resolved at gen time"
+grep -q "PathChanged=$oreal/app.toml\$" \
+  "$XDG_CONFIG_HOME/systemd/user/smoked-config.path" \
+  || fail "smoke: relative --config not resolved at gen time"
+
 # --no-start: stamp + clone + build, but unit state untouched (nothing
 # enabled, started or restarted); a later plain re-gen goes live.
 nostart_out=$("$samosbor" gen --name inert --repo "$origin" \

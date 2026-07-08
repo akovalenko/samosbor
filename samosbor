@@ -134,6 +134,21 @@ check_no_tilde() {  # $1=flag name, $2=value
   esac
 }
 
+# Path flags land in unit directives (EnvironmentFile=, PathChanged=) or
+# get used from timer context (--install-to, --cwd) — both need absolute
+# paths: systemd refuses relative ones, and "relative to wherever the
+# timer woke up" is never what was meant. A relative path (incl. .)
+# resolves against the caller's cwd at gen time; a QUOTED ~ (unquoted
+# ones the shell already expanded) is refused with the alternatives
+# spelled out.
+resolve_gen_path() {  # $1=flag name, $2=path
+  case $2 in
+    /*)   printf '%s\n' "$2" ;;
+    '~'*) die "gen: $1 path '$2' starts with ~ — systemd does not expand it; give an absolute path (an unquoted ~ is expanded by your shell)" ;;
+    *)    readlink -f -- "$2" || die "gen: $1: cannot resolve '$2'" ;;
+  esac
+}
+
 # Environment= values are meant byte-literal, so escape what systemd
 # would interpret: the specifier layer (% → %%) and the C-style quoting
 # layer (backslash, double quote, newline). $ needs nothing — systemd
@@ -240,7 +255,7 @@ render_units() {
   # triggering a same-name oneshot that try-restarts the service. A service
   # stopped by hand stays stopped.
   local watched=(${M_CONFIGS[@]+"${M_CONFIGS[@]}"})
-  if [ -n "$M_ENV_FILE" ]; then watched+=("$M_ENV_FILE"); fi
+  if [ -n "$M_ENV_FILE" ]; then watched+=("${M_ENV_FILE#-}"); fi  # PathChanged wants the bare path
   if [ "${#watched[@]}" -gt 0 ]; then
     {
       echo "[Unit]"
@@ -479,13 +494,16 @@ gen flags:
   --bin <path>              where --build-cmd drops the binary, relative to
                             the project root
   --config <path>           watched config: change => restart, no rebuild
-                            (repeatable)
+                            (repeatable; a relative path resolves against
+                            your cwd at gen time, as do --env-file,
+                            --install-to and --cwd)
   --env <NAME|NAME=VALUE>   Environment= for the service (repeatable); bare
                             NAME captures the value from YOUR environment at
                             gen time and hardcodes it — e.g. --env PATH gives
                             the daemon your PATH, not the systemd default;
                             regen keeps it, re-run gen to refresh
-  --env-file <path>         EnvironmentFile= for the service; watched too
+  --env-file <path>         EnvironmentFile= for the service; watched too;
+                            a leading - (optional file) survives
   --run-cmd <cmd>           override ExecStart (default: the artifact)
   --run-args <args>         appended to the default ExecStart — pass daemon
                             flags without knowing where the artifact lands
@@ -533,18 +551,19 @@ cmd_gen() {
       --python)        M_PYTHON=$2; shift 2 ;;
       --build-cmd)     M_BUILD_CMD=$2; shift 2 ;;
       --bin)           M_BIN=$2; shift 2 ;;
-      --config)        M_CONFIGS+=("$2"); shift 2 ;;
+      --config)        M_CONFIGS+=("$(resolve_gen_path --config "$2")"); shift 2 ;;
       --env)           M_ENVS+=("$(resolve_env "$2")"); shift 2 ;;
-      --env-file)      M_ENV_FILE=$2; shift 2 ;;
+      # systemd's optional-file dash survives: -/etc/x and -relative both work.
+      --env-file) case $2 in
+                    -*) M_ENV_FILE=-$(resolve_gen_path --env-file "${2#-}") ;;
+                    *)  M_ENV_FILE=$(resolve_gen_path --env-file "$2") ;;
+                  esac; shift 2 ;;
       --run-cmd)       M_RUN_CMD=$2; shift 2 ;;
       --run-args)      M_RUN_ARGS=$2; shift 2 ;;
-      --install-to)    M_INSTALL_TO=$2; shift 2 ;;
-      # Relative --cwd (incl. .) is resolved against the caller's cwd HERE,
-      # at gen time — the manifest keeps the result, like --env captures.
-      --cwd) case $2 in
-               /*) M_CWD=$2 ;;
-               *)  M_CWD=$(readlink -f -- "$2") || die "gen: --cwd: cannot resolve '$2'" ;;
-             esac; shift 2 ;;
+      --install-to)    M_INSTALL_TO=$(resolve_gen_path --install-to "$2"); shift 2 ;;
+      # Resolution happens HERE, at gen time — the manifest keeps the
+      # resolved path, the same capture semantics as bare --env.
+      --cwd)           M_CWD=$(resolve_gen_path --cwd "$2"); shift 2 ;;
       --pull-interval) M_PULL_INTERVAL=$2; shift 2 ;;
       --vcs-stamp)     M_VCS_STAMP=1; shift ;;
       --user)          MODE=user; shift ;;
@@ -584,15 +603,8 @@ cmd_gen() {
   check_no_tilde --run-cmd    "$M_RUN_CMD"
   check_no_tilde --run-args   "$M_RUN_ARGS"
   check_no_tilde --entrypoint "$M_ENTRYPOINT"
-  # Same trap for the path flags that land in unit directives (PathChanged=,
-  # EnvironmentFile=): a QUOTED ~/... arrives here literal (unquoted ones the
-  # shell already expanded) and systemd will not expand it either.
-  local p
-  for p in "$M_ENV_FILE" "$M_INSTALL_TO" ${M_CONFIGS[@]+"${M_CONFIGS[@]}"}; do
-    case $p in
-      '~'*) die "gen: path '$p' starts with ~ — systemd does not expand it; give an absolute path (an unquoted ~ is expanded by your shell)" ;;
-    esac
-  done
+  # (The path flags — --config/--env-file/--install-to/--cwd — went through
+  # resolve_gen_path at parse time: quoted ~ refused, relative resolved.)
   if [ -n "$M_CWD" ] && [ ! -d "$M_CWD" ]; then
     info "warning: --cwd $M_CWD does not exist — the service will fail (200/CHDIR) until it does"
   fi
