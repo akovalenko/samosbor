@@ -6,6 +6,7 @@ ExecStart=/home/user/.local/state/samosbor/demo/current/demo --listen :8080 --ve
 WorkingDirectory=/home/user/.local/state/samosbor/demo
 Environment="DEMO_TOKEN=s3cr3t"
 Environment="GREETING=hello world"
+Environment="TRICKY=50%% \"q\" $dollar \\back"
 EnvironmentFile=/etc/demo/env
 Restart=always
 RestartSec=2

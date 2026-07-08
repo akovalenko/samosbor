@@ -119,6 +119,19 @@ artifact_path() { echo "$(artifact_dir)/$M_NAME"; }
 
 # ---------------------------------------------------------------- rendering
 
+# Environment= values are meant byte-literal, so escape what systemd
+# would interpret: the specifier layer (% → %%) and the C-style quoting
+# layer (backslash, double quote, newline). $ needs nothing — systemd
+# expands $VAR only in Exec*= lines, never inside Environment= values.
+env_quote() {
+  local v=$1
+  v=${v//\\/\\\\}
+  v=${v//\"/\\\"}
+  v=${v//$'\n'/\\n}
+  v=${v//%/%%}
+  printf '%s' "$v"
+}
+
 exec_start() {
   local base
   if   [ -n "$M_RUN_CMD" ];   then base=$M_RUN_CMD
@@ -143,7 +156,7 @@ render_units() {
     echo "ExecStart=$(exec_start)"
     echo "WorkingDirectory=$(working_dir)"
     local e
-    for e in ${M_ENVS[@]+"${M_ENVS[@]}"}; do echo "Environment=\"$e\""; done
+    for e in ${M_ENVS[@]+"${M_ENVS[@]}"}; do echo "Environment=\"$(env_quote "$e")\""; done
     if [ -n "$M_ENV_FILE" ]; then echo "EnvironmentFile=$M_ENV_FILE"; fi
     echo "Restart=always"
     echo "RestartSec=2"

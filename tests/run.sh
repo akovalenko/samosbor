@@ -23,6 +23,7 @@ env "${golden_env[@]}" "$samosbor" gen \
   --name demo --repo https://example.com/demo.git --preset go \
   --config /etc/demo/conf.toml --env-file /etc/demo/env \
   --env DEMO_TOKEN --env GREETING='hello world' \
+  --env 'TRICKY=50% "q" $dollar \back' \
   --run-args '--listen :8080 --verbose' \
   --render-to "$tmp/go-demo" 2>/dev/null
 diff -ru "$here/golden/go-demo" "$tmp/go-demo" || fail "golden go-demo diverged"

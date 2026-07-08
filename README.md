@@ -101,7 +101,9 @@ Units run with systemd's own minimal environment, not your shell's —
 `--env PATH` captures *your* value at `gen` time and hardcodes it into
 the unit (bare `--env NAME` for any variable, `--env NAME=VALUE` for a
 literal, repeatable). Captured values live in the manifest: `regen`
-keeps them, re-run `gen` to refresh.
+keeps them, re-run `gen` to refresh. Values land byte-literal: samosbor
+escapes systemd's specifier layer (`%`) and unit quoting for you, and
+`$` is never expanded inside `Environment=` to begin with.
 
 A local path given as `--repo` is only the *origin*: samosbor still
 clones it into state and works on its own copy — the pristine policy
