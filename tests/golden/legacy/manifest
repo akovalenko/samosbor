@@ -12,6 +12,7 @@ M_RUN_CMD=''
 M_RUN_ARGS=--port\ 9090\ --data\ \"/home/user/my\ data\"
 M_ENV_FILE=''
 M_INSTALL_TO=/home/user/.local/bin
+M_CWD=/srv/legacy-data
 M_PULL_INTERVAL=10m
 M_VCS_STAMP=0
 M_MODE=user

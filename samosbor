@@ -59,7 +59,7 @@ mode_flag() { [ "$MODE" = system ] && echo " --system" || true; }
 # read it back — nothing is ever re-derived from the command line.
 manifest_reset() {
   M_NAME= M_REPO= M_PRESET= M_PACKAGE= M_COMPONENT= M_ENTRYPOINT= M_PYTHON=
-  M_BUILD_CMD= M_BIN= M_RUN_CMD= M_RUN_ARGS= M_ENV_FILE= M_INSTALL_TO=
+  M_BUILD_CMD= M_BIN= M_RUN_CMD= M_RUN_ARGS= M_ENV_FILE= M_INSTALL_TO= M_CWD=
   M_PULL_INTERVAL=5m M_VCS_STAMP=0 M_MODE=
   M_CONFIGS=() M_ENVS=()
 }
@@ -93,6 +93,7 @@ write_manifest() {
     printf 'M_RUN_ARGS=%q\n'      "$M_RUN_ARGS"
     printf 'M_ENV_FILE=%q\n'      "$M_ENV_FILE"
     printf 'M_INSTALL_TO=%q\n'    "$M_INSTALL_TO"
+    printf 'M_CWD=%q\n'           "$M_CWD"
     printf 'M_PULL_INTERVAL=%q\n' "$M_PULL_INTERVAL"
     printf 'M_VCS_STAMP=%q\n'     "$M_VCS_STAMP"
     printf 'M_MODE=%q\n'          "$M_MODE"
@@ -177,7 +178,9 @@ exec_start() {
 }
 
 working_dir() {
-  if [ "$M_PRESET" = python ]; then echo "$(state_dir)/src"; else state_dir; fi
+  if   [ -n "$M_CWD" ]; then echo "$M_CWD"
+  elif [ "$M_PRESET" = python ]; then echo "$(state_dir)/src"
+  else state_dir; fi
 }
 
 render_units() {
@@ -495,6 +498,12 @@ gen flags:
   --install-to <dir>        install the working binary there (e.g.
                             ~/.local/bin when it has a user-facing surface);
                             default: the project state dir, current/
+  --cwd <dir>               WorkingDirectory= for the service; a relative
+                            path (incl. .) resolves against YOUR cwd at gen
+                            time and is baked into the manifest — so
+                            --cwd . -- -c config.toml runs the daemon here.
+                            Default: the source clone for python, the
+                            project state dir otherwise
   --pull-interval <dur>     pull timer cadence (default 5m)
   --vcs-stamp               go: keep -buildvcs (honest revision in the
                             binary; every commit then restarts the service)
@@ -526,6 +535,12 @@ cmd_gen() {
       --run-cmd)       M_RUN_CMD=$2; shift 2 ;;
       --run-args)      M_RUN_ARGS=$2; shift 2 ;;
       --install-to)    M_INSTALL_TO=$2; shift 2 ;;
+      # Relative --cwd (incl. .) is resolved against the caller's cwd HERE,
+      # at gen time — the manifest keeps the result, like --env captures.
+      --cwd) case $2 in
+               /*) M_CWD=$2 ;;
+               *)  M_CWD=$(readlink -f -- "$2") || die "gen: --cwd: cannot resolve '$2'" ;;
+             esac; shift 2 ;;
       --pull-interval) M_PULL_INTERVAL=$2; shift 2 ;;
       --vcs-stamp)     M_VCS_STAMP=1; shift ;;
       --user)          MODE=user; shift ;;
@@ -573,6 +588,9 @@ cmd_gen() {
       '~'*) die "gen: path '$p' starts with ~ — systemd does not expand it; give an absolute path (an unquoted ~ is expanded by your shell)" ;;
     esac
   done
+  if [ -n "$M_CWD" ] && [ ! -d "$M_CWD" ]; then
+    info "warning: --cwd $M_CWD does not exist — the service will fail (200/CHDIR) until it does"
+  fi
 
   if [ -n "$render_to" ]; then
     render_units "$render_to"

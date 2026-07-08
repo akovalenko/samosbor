@@ -30,7 +30,7 @@ diff -ru "$here/golden/go-demo" "$tmp/go-demo" || fail "golden go-demo diverged"
 
 env "${golden_env[@]}" "$samosbor" gen \
   --name legacy --repo /srv/git/legacy --build-cmd 'make -j' --bin out/legacyd \
-  --install-to /home/user/.local/bin --pull-interval 10m \
+  --install-to /home/user/.local/bin --pull-interval 10m --cwd /srv/legacy-data \
   --render-to "$tmp/legacy" -- --port 9090 --data '/home/user/my data' 2>/dev/null
 diff -ru "$here/golden/legacy" "$tmp/legacy" || fail "golden legacy diverged"
 
@@ -159,6 +159,13 @@ fi
 grep -q 'ExecStart=.*smoked --verbose' \
   "$XDG_CONFIG_HOME/systemd/user/smoked.service" \
   || fail "smoke: -- tail did not land in ExecStart"
+
+# --cwd .: the caller's cwd is captured at gen time into the manifest
+(cd "$origin" && "$samosbor" gen --name smoked --repo "$origin" \
+  --build-cmd 'sh build.sh' --bin smoked --cwd . 2>/dev/null)
+grep -q "WorkingDirectory=$(readlink -f "$origin")\$" \
+  "$XDG_CONFIG_HOME/systemd/user/smoked.service" \
+  || fail "smoke: --cwd . did not capture gen-time cwd"
 
 # uninstall keeps state, --purge wipes it (unit dir is fake but exercised)
 mkdir -p "$XDG_CONFIG_HOME/systemd/user"
