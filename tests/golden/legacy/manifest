@@ -8,6 +8,7 @@ M_ENTRYPOINT=''
 M_BUILD_CMD=make\ -j
 M_BIN=out/legacyd
 M_RUN_CMD=''
+M_RUN_ARGS=''
 M_ENV_FILE=''
 M_INSTALL_TO=/home/user/.local/bin
 M_PULL_INTERVAL=10m

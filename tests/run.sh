@@ -21,6 +21,7 @@ golden_env=(HOME=/home/user
 env "${golden_env[@]}" "$samosbor" gen \
   --name demo --repo https://example.com/demo.git --preset go \
   --config /etc/demo/conf.toml --env-file /etc/demo/env \
+  --run-args '--listen :8080 --verbose' \
   --render-to "$tmp/go-demo" 2>/dev/null
 diff -ru "$here/golden/go-demo" "$tmp/go-demo" || fail "golden go-demo diverged"
 
@@ -35,6 +36,15 @@ env "${golden_env[@]}" "$samosbor" gen \
   --entrypoint '/home/user/.local/state/samosbor/webapp/build/venv/bin/python -m webapp' \
   --render-to "$tmp/webapp" 2>/dev/null
 diff -ru "$here/golden/webapp" "$tmp/webapp" || fail "golden webapp diverged"
+
+# --run-cmd already carries its own args — combining it with --run-args
+# must be refused at gen time.
+if env "${golden_env[@]}" "$samosbor" gen \
+     --name clash --repo https://example.com/clash.git --preset go \
+     --run-cmd '/usr/bin/clash --serve' --run-args '--verbose' \
+     --render-to "$tmp/clash" 2>/dev/null; then
+  fail "gen accepted --run-cmd together with --run-args"
+fi
 
 echo "golden: OK"
 

@@ -59,7 +59,7 @@ mode_flag() { [ "$MODE" = system ] && echo " --system" || true; }
 # read it back — nothing is ever re-derived from the command line.
 manifest_reset() {
   M_NAME= M_REPO= M_PRESET= M_PACKAGE= M_COMPONENT= M_ENTRYPOINT=
-  M_BUILD_CMD= M_BIN= M_RUN_CMD= M_ENV_FILE= M_INSTALL_TO=
+  M_BUILD_CMD= M_BIN= M_RUN_CMD= M_RUN_ARGS= M_ENV_FILE= M_INSTALL_TO=
   M_PULL_INTERVAL=5m M_VCS_STAMP=0 M_MODE=
   M_CONFIGS=()
 }
@@ -77,6 +77,7 @@ write_manifest() {
     printf 'M_BUILD_CMD=%q\n'     "$M_BUILD_CMD"
     printf 'M_BIN=%q\n'           "$M_BIN"
     printf 'M_RUN_CMD=%q\n'       "$M_RUN_CMD"
+    printf 'M_RUN_ARGS=%q\n'      "$M_RUN_ARGS"
     printf 'M_ENV_FILE=%q\n'      "$M_ENV_FILE"
     printf 'M_INSTALL_TO=%q\n'    "$M_INSTALL_TO"
     printf 'M_PULL_INTERVAL=%q\n' "$M_PULL_INTERVAL"
@@ -104,9 +105,11 @@ artifact_path() { echo "$(artifact_dir)/$M_NAME"; }
 # ---------------------------------------------------------------- rendering
 
 exec_start() {
-  if   [ -n "$M_RUN_CMD" ];   then echo "$M_RUN_CMD"
-  elif [ "$M_PRESET" = python ]; then echo "$M_ENTRYPOINT"
-  else artifact_path; fi
+  local base
+  if   [ -n "$M_RUN_CMD" ];   then base=$M_RUN_CMD
+  elif [ "$M_PRESET" = python ]; then base=$M_ENTRYPOINT
+  else base=$(artifact_path); fi
+  echo "$base${M_RUN_ARGS:+ $M_RUN_ARGS}"
 }
 
 working_dir() {
@@ -370,6 +373,9 @@ gen flags:
                             (repeatable)
   --env-file <path>         EnvironmentFile= for the service; watched too
   --run-cmd <cmd>           override ExecStart (default: the artifact)
+  --run-args <args>         appended to the default ExecStart — pass daemon
+                            flags without knowing where the artifact lands
+                            (mutually exclusive with --run-cmd: put them there)
   --install-to <dir>        install the working binary there (e.g.
                             ~/.local/bin when it has a user-facing surface);
                             default: the project state dir, current/
@@ -400,6 +406,7 @@ cmd_gen() {
       --config)        M_CONFIGS+=("$2"); shift 2 ;;
       --env-file)      M_ENV_FILE=$2; shift 2 ;;
       --run-cmd)       M_RUN_CMD=$2; shift 2 ;;
+      --run-args)      M_RUN_ARGS=$2; shift 2 ;;
       --install-to)    M_INSTALL_TO=$2; shift 2 ;;
       --pull-interval) M_PULL_INTERVAL=$2; shift 2 ;;
       --vcs-stamp)     M_VCS_STAMP=1; shift ;;
@@ -417,6 +424,9 @@ cmd_gen() {
   case $M_NAME in */*|*' '*) die "gen: --name must be a plain word" ;; esac
   if [ -n "$M_PRESET" ] && [ -n "$M_BUILD_CMD" ]; then
     die "gen: --preset and --build-cmd are mutually exclusive"
+  fi
+  if [ -n "$M_RUN_CMD" ] && [ -n "$M_RUN_ARGS" ]; then
+    die "gen: --run-cmd and --run-args are mutually exclusive (put the args in --run-cmd)"
   fi
   if [ -z "$M_PRESET" ]; then
     [ -n "$M_BUILD_CMD" ] || die "gen: need --preset or --build-cmd"

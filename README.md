@@ -16,10 +16,10 @@ the generator.
 ## Quick start
 
 ```sh
-# a Go service, config watched, binary also wanted on PATH
+# a Go service with daemon flags, config watched, binary also on PATH
 samosbor gen --name mybot --repo https://github.com/me/mybot \
-  --preset go --config ~/.config/mybot/conf.toml \
-  --install-to ~/.local/bin
+  --preset go --run-args '--listen :8080' \
+  --config ~/.config/mybot/conf.toml --install-to ~/.local/bin
 
 # a legacy in-tree Makefile project
 samosbor gen --name legacyd --repo /srv/git/legacyd \
@@ -91,6 +91,11 @@ One root per project — `uninstall --purge` is one `rm -rf`:
 `--install-to ~/.local/bin` puts the working binary there instead of
 `current/` — for binaries with a user-facing surface besides the daemon
 one. The swap is still atomic, `last-good` still kept in state.
+
+CLI arguments for the daemon go through `--run-args '--listen :8080'` —
+appended to the generated `ExecStart`, so you never need to know where
+the artifact lands. (`--run-cmd` still overrides the whole line; the two
+are mutually exclusive.)
 
 A local path given as `--repo` is only the *origin*: samosbor still
 clones it into state and works on its own copy — the pristine policy

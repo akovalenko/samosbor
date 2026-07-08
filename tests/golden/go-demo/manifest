@@ -8,6 +8,7 @@ M_ENTRYPOINT=''
 M_BUILD_CMD=''
 M_BIN=''
 M_RUN_CMD=''
+M_RUN_ARGS=--listen\ :8080\ --verbose
 M_ENV_FILE=/etc/demo/env
 M_INSTALL_TO=''
 M_PULL_INTERVAL=5m

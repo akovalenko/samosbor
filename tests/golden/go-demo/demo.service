@@ -2,7 +2,7 @@
 Description=demo (managed by samosbor)
 
 [Service]
-ExecStart=/home/user/.local/state/samosbor/demo/current/demo
+ExecStart=/home/user/.local/state/samosbor/demo/current/demo --listen :8080 --verbose
 WorkingDirectory=/home/user/.local/state/samosbor/demo
 EnvironmentFile=/etc/demo/env
 Restart=always

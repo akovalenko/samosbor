@@ -8,6 +8,7 @@ M_ENTRYPOINT=/home/user/.local/state/samosbor/webapp/build/venv/bin/python\ -m\ 
 M_BUILD_CMD=''
 M_BIN=''
 M_RUN_CMD=''
+M_RUN_ARGS=''
 M_ENV_FILE=''
 M_INSTALL_TO=''
 M_PULL_INTERVAL=5m
