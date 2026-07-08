@@ -1,0 +1,12 @@
+[Unit]
+Description=legacy (managed by samosbor)
+
+[Service]
+ExecStart=/home/user/.local/bin/legacy
+WorkingDirectory=/home/user/.local/state/samosbor/legacy
+Restart=always
+RestartSec=2
+TimeoutStopSec=30
+
+[Install]
+WantedBy=default.target

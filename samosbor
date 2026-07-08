@@ -1,0 +1,578 @@
+#!/usr/bin/env bash
+# samosbor — keep systemd services fresh from git.
+#
+# Stamps and manages a per-project set of systemd units that pull a git
+# repo, rebuild it out of tree, and restart the service only when the
+# built artifact actually changed. systemd does the supervision; samosbor
+# only generates.
+#
+# Requires bash >= 4.4.
+set -euo pipefail
+
+SELF=${SAMOSBOR_SELF:-$(readlink -f "$0")}
+
+die()  { echo "samosbor: $*" >&2; exit 1; }
+info() { echo "samosbor: $*" >&2; }
+
+# ---------------------------------------------------------------- mode/paths
+
+MODE=   # user|system; resolved once per invocation
+
+resolve_mode() {
+  if [ -z "$MODE" ]; then
+    [ "$(id -u)" = 0 ] && die "running as root: pass --user or --system explicitly"
+    MODE=user
+  fi
+  case $MODE in
+    user)
+      UNIT_DIR=${XDG_CONFIG_HOME:-$HOME/.config}/systemd/user
+      STATE_ROOT=${XDG_STATE_HOME:-$HOME/.local/state}/samosbor
+      SC=(systemctl --user)
+      SERVICE_WANTED_BY=default.target
+      ;;
+    system)
+      UNIT_DIR=/etc/systemd/system
+      STATE_ROOT=/var/lib/samosbor
+      SC=(systemctl)
+      SERVICE_WANTED_BY=multi-user.target
+      ;;
+    *) die "unknown mode: $MODE" ;;
+  esac
+}
+
+# systemctl seam: SAMOSBOR_NO_SYSTEMCTL=1 logs instead of calling out —
+# lets gen/pull run end-to-end in tests and sandboxes without systemd.
+sc() {
+  if [ -n "${SAMOSBOR_NO_SYSTEMCTL:-}" ]; then
+    info "[no-systemctl] ${SC[*]} $*"
+    return 0
+  fi
+  "${SC[@]}" "$@"
+}
+
+mode_flag() { [ "$MODE" = system ] && echo " --system" || true; }
+
+# ---------------------------------------------------------------- manifest
+
+# Manifest variables (M_*) are the resolved `gen` arguments, written as a
+# bash-sourceable file into the project state dir. regen/pull/list/uninstall
+# read it back — nothing is ever re-derived from the command line.
+manifest_reset() {
+  M_NAME= M_REPO= M_PRESET= M_PACKAGE= M_COMPONENT= M_ENTRYPOINT=
+  M_BUILD_CMD= M_BIN= M_RUN_CMD= M_ENV_FILE= M_INSTALL_TO=
+  M_PULL_INTERVAL=5m M_VCS_STAMP=0 M_MODE=
+  M_CONFIGS=()
+}
+
+write_manifest() {
+  local out=$1 c
+  {
+    echo "# samosbor manifest — resolved gen arguments (regen reads this)"
+    printf 'M_NAME=%q\n'          "$M_NAME"
+    printf 'M_REPO=%q\n'          "$M_REPO"
+    printf 'M_PRESET=%q\n'        "$M_PRESET"
+    printf 'M_PACKAGE=%q\n'       "$M_PACKAGE"
+    printf 'M_COMPONENT=%q\n'     "$M_COMPONENT"
+    printf 'M_ENTRYPOINT=%q\n'    "$M_ENTRYPOINT"
+    printf 'M_BUILD_CMD=%q\n'     "$M_BUILD_CMD"
+    printf 'M_BIN=%q\n'           "$M_BIN"
+    printf 'M_RUN_CMD=%q\n'       "$M_RUN_CMD"
+    printf 'M_ENV_FILE=%q\n'      "$M_ENV_FILE"
+    printf 'M_INSTALL_TO=%q\n'    "$M_INSTALL_TO"
+    printf 'M_PULL_INTERVAL=%q\n' "$M_PULL_INTERVAL"
+    printf 'M_VCS_STAMP=%q\n'     "$M_VCS_STAMP"
+    printf 'M_MODE=%q\n'          "$M_MODE"
+    printf 'M_CONFIGS=('
+    for c in ${M_CONFIGS[@]+"${M_CONFIGS[@]}"}; do printf '%q ' "$c"; done
+    printf ')\n'
+  } >"$out"
+}
+
+load_manifest() {
+  local name=$1 manifest="$STATE_ROOT/$1/manifest"
+  [ -f "$manifest" ] || die "no manifest for '$name' ($manifest) — not a samosbor project?"
+  manifest_reset
+  # shellcheck disable=SC1090
+  . "$manifest"
+  [ "$M_MODE" = "$MODE" ] || die "'$name' was generated for --$M_MODE, invoked as --$MODE"
+}
+
+state_dir()     { echo "$STATE_ROOT/$M_NAME"; }
+artifact_dir()  { echo "${M_INSTALL_TO:-$STATE_ROOT/$M_NAME/current}"; }
+artifact_path() { echo "$(artifact_dir)/$M_NAME"; }
+
+# ---------------------------------------------------------------- rendering
+
+exec_start() {
+  if   [ -n "$M_RUN_CMD" ];   then echo "$M_RUN_CMD"
+  elif [ "$M_PRESET" = python ]; then echo "$M_ENTRYPOINT"
+  else artifact_path; fi
+}
+
+working_dir() {
+  if [ "$M_PRESET" = python ]; then echo "$(state_dir)/src"; else state_dir; fi
+}
+
+render_units() {
+  local out=$1
+  mkdir -p "$out"
+
+  {
+    echo "[Unit]"
+    echo "Description=$M_NAME (managed by samosbor)"
+    echo
+    echo "[Service]"
+    echo "ExecStart=$(exec_start)"
+    echo "WorkingDirectory=$(working_dir)"
+    if [ -n "$M_ENV_FILE" ]; then echo "EnvironmentFile=$M_ENV_FILE"; fi
+    echo "Restart=always"
+    echo "RestartSec=2"
+    echo "TimeoutStopSec=30"
+    echo
+    echo "[Install]"
+    echo "WantedBy=$SERVICE_WANTED_BY"
+  } >"$out/$M_NAME.service"
+
+  {
+    echo "[Unit]"
+    echo "Description=$M_NAME: git pull + rebuild (samosbor)"
+    echo
+    echo "[Service]"
+    echo "Type=oneshot"
+    echo "ExecStart=$SELF pull$(mode_flag) $M_NAME"
+  } >"$out/$M_NAME-pull.service"
+
+  {
+    echo "[Unit]"
+    echo "Description=$M_NAME: periodic pull (samosbor)"
+    echo
+    echo "[Timer]"
+    echo "OnBootSec=2m"
+    echo "OnUnitActiveSec=$M_PULL_INTERVAL"
+    echo "RandomizedDelaySec=30s"
+    echo
+    echo "[Install]"
+    echo "WantedBy=timers.target"
+  } >"$out/$M_NAME-pull.timer"
+
+  # Config watch: one path unit for every watched file (configs + env-file),
+  # triggering a same-name oneshot that try-restarts the service. A service
+  # stopped by hand stays stopped.
+  local watched=(${M_CONFIGS[@]+"${M_CONFIGS[@]}"})
+  if [ -n "$M_ENV_FILE" ]; then watched+=("$M_ENV_FILE"); fi
+  if [ "${#watched[@]}" -gt 0 ]; then
+    {
+      echo "[Unit]"
+      echo "Description=$M_NAME: config watch (samosbor)"
+      echo
+      echo "[Path]"
+      local w
+      for w in "${watched[@]}"; do echo "PathChanged=$w"; done
+      echo
+      echo "[Install]"
+      echo "WantedBy=paths.target"
+    } >"$out/$M_NAME-config.path"
+    local sysctl="systemctl"
+    if [ "$MODE" = user ]; then sysctl="systemctl --user"; fi
+    {
+      echo "[Unit]"
+      echo "Description=$M_NAME: restart on config change (samosbor)"
+      echo
+      echo "[Service]"
+      echo "Type=oneshot"
+      echo "ExecStart=$sysctl try-restart $M_NAME.service"
+    } >"$out/$M_NAME-config.service"
+  fi
+}
+
+project_units() {  # unit basenames this project may have stamped
+  echo "$M_NAME.service" "$M_NAME-pull.timer" "$M_NAME-pull.service" \
+       "$M_NAME-config.path" "$M_NAME-config.service"
+}
+
+# ---------------------------------------------------------------- pull
+
+# Pristine mirror: absorbs upstream force-push/amend/rebase. The clone is
+# owned by samosbor — never edit it. Submodules need the explicit dance:
+# plain fetch/reset/clean do not recurse.
+sync_src() {
+  local src="$(state_dir)/src"
+  if [ ! -d "$src/.git" ]; then
+    info "initial clone of $M_REPO"
+    git clone --quiet "$M_REPO" "$src"
+  else
+    git -C "$src" fetch --prune --quiet
+  fi
+  local cur up
+  cur=$(git -C "$src" rev-parse HEAD)
+  up=$(git -C "$src" rev-parse '@{u}' 2>/dev/null || echo "$cur")
+  SRC_CHANGED=1
+  if [ "$cur" = "$up" ]; then SRC_CHANGED=0; fi
+  git -C "$src" reset --hard --quiet '@{u}' 2>/dev/null || true
+  git -C "$src" submodule --quiet sync --recursive
+  git -C "$src" submodule --quiet update --init --recursive --force
+  git -C "$src" clean -ffdxq
+  git -C "$src" submodule --quiet foreach --recursive git clean -ffdxq
+}
+
+# Build out of tree; on success BUILT points at the fresh binary.
+# python has no binary artifact — restart decision is made on the source
+# tree hash instead (BUILT stays empty).
+build() {
+  local state src out
+  state=$(state_dir); src=$state/src
+  BUILT=
+  case $M_PRESET in
+    go)
+      out=$state/build/out/$M_NAME
+      mkdir -p "${out%/*}" "$state/build/gocache"
+      local vcs=(-buildvcs=false)
+      if [ "$M_VCS_STAMP" = 1 ]; then vcs=(); fi
+      (cd "$src" && GOCACHE=$state/build/gocache \
+        go build -trimpath ${vcs[@]+"${vcs[@]}"} -o "$out" "${M_PACKAGE:-./cmd/$M_NAME}") || return 1
+      BUILT=$out
+      ;;
+    rust)
+      (cd "$src" && cargo build --quiet --release \
+        --target-dir "$state/build/target" ${M_PACKAGE:+-p "$M_PACKAGE"}) || return 1
+      BUILT=$state/build/target/release/${M_PACKAGE:-$M_NAME}
+      ;;
+    haskell)
+      (cd "$src" && cabal build --builddir="$state/build/dist" "${M_COMPONENT:-exe:$M_NAME}") || return 1
+      BUILT=$(cd "$src" && cabal list-bin --builddir="$state/build/dist" "${M_COMPONENT:-exe:$M_NAME}") || return 1
+      ;;
+    python)
+      local venv=$state/build/venv
+      [ -d "$venv" ] || python3 -m venv "$venv"
+      if   [ -f "$src/requirements.txt" ]; then "$venv/bin/pip" install -q -r "$src/requirements.txt"
+      elif [ -f "$src/pyproject.toml"   ]; then "$venv/bin/pip" install -q -e "$src"
+      fi
+      ;;
+    '')
+      # Escape hatch: the build command always runs in a tree mirror, so
+      # in-tree builds (make, build.sh) never dirty the pristine clone.
+      # rsync --checksum keeps mtimes of unchanged files — make stays
+      # incremental across pulls.
+      local mirror=$state/build/tree
+      mkdir -p "$mirror"
+      rsync -a --checksum --delete --exclude=.git "$src/" "$mirror/" || return 1
+      (cd "$mirror" && bash -c "$M_BUILD_CMD") || return 1
+      BUILT=$mirror/$M_BIN
+      ;;
+    *) die "unknown preset: $M_PRESET" ;;
+  esac
+  if [ -n "$BUILT" ] && [ ! -f "$BUILT" ]; then
+    info "build produced no artifact at $BUILT"
+    return 1
+  fi
+}
+
+# Gentle replace: byte-compare the fresh artifact against the installed
+# one; identical => no restart (a README-only commit never bounces the
+# service). Differs => keep last-good, atomic-rename the new one in.
+install_artifact() {  # sets RESTART=0|1
+  local state dest
+  state=$(state_dir)
+  RESTART=0
+  if [ "$M_PRESET" = python ]; then
+    local tree
+    tree=$(git -C "$state/src" rev-parse 'HEAD^{tree}')
+    if [ "$tree" != "$(cat "$state/built-tree" 2>/dev/null || true)" ]; then
+      echo "$tree" >"$state/built-tree"
+      RESTART=1
+    fi
+    return 0
+  fi
+  dest=$(artifact_path)
+  mkdir -p "$(artifact_dir)"
+  if [ -f "$dest" ] && cmp -s "$BUILT" "$dest"; then
+    info "artifact unchanged — gentle replace, no restart"
+    return 0
+  fi
+  if [ -f "$dest" ]; then
+    mkdir -p "$state/last-good"
+    cp -p "$dest" "$state/last-good/$M_NAME"
+  fi
+  cp "$BUILT" "$dest.samosbor-new"
+  chmod +x "$dest.samosbor-new"
+  mv -f "$dest.samosbor-new" "$dest"
+  RESTART=1
+}
+
+do_pull() {  # $1=name, $2=initial (optional)
+  local name=$1 initial=${2:-}
+  load_manifest "$name"
+  local state; state=$(state_dir)
+  mkdir -p "$state"
+
+  sync_src
+  # Fast path: nothing new and an artifact is already installed.
+  if [ "$SRC_CHANGED" = 0 ] && [ -z "$initial" ]; then
+    if { [ "$M_PRESET" = python ] && [ -f "$state/built-tree" ]; } \
+       || { [ "$M_PRESET" != python ] && [ -f "$(artifact_path)" ]; }; then
+      record_pull "$state" unchanged
+      return 0
+    fi
+  fi
+
+  if ! build; then
+    info "build FAILED — keeping the current artifact running"
+    record_pull "$state" build-failed
+    return 1
+  fi
+  install_artifact
+  if [ "$RESTART" = 1 ] && [ -z "$initial" ]; then
+    sc try-restart "$M_NAME.service" || info "try-restart failed — check journalctl"
+  fi
+  record_pull "$state" "$([ "$RESTART" = 1 ] && echo updated || echo unchanged)"
+}
+
+record_pull() {
+  local state=$1 result=$2
+  printf '%s rev=%s result=%s\n' "$(date -Is)" \
+    "$(git -C "$state/src" rev-parse --short HEAD 2>/dev/null || echo '?')" \
+    "$result" >"$state/last-pull"
+}
+
+# ---------------------------------------------------------------- commands
+
+usage() {
+  sed -n '/^# samosbor — keep/,/^$/s/^# \{0,1\}//p' "$SELF"
+  cat <<'EOF'
+Usage:
+  samosbor gen [flags]         stamp units + state for one project
+  samosbor pull <name>         fetch/build/swap/restart (what the timer calls)
+  samosbor regen <name>|--all  restamp units from the saved manifest
+                               (preserves current enabled/active state)
+  samosbor list [--terse]      the fleet, detailed by default; --terse:
+                               one line per project
+  samosbor uninstall <name> [--purge]
+                               disable + remove the unit set
+                               (--purge: also wipe the state dir)
+
+gen flags:
+  --name <name>             service name (required); unit name == project
+                            name, no prefix
+  --repo <url|path>         git repo; a local path is only the origin —
+                            samosbor always works on its own pristine clone
+  --preset go|rust|haskell|python
+                            build recipe (native out-of-tree)
+    go:      --package <./cmd/x>   package to build (default ./cmd/<name>)
+    rust:    --package <name>      cargo -p in a workspace
+    haskell: --component <exe:x>   cabal component (default exe:<name>)
+    python:  --entrypoint <cmd>    ExecStart, verbatim (required)
+  --build-cmd <cmd>         escape hatch for make/build.sh zoos: runs in a
+                            tree mirror under build/tree/, clone stays
+                            pristine, make stays incremental
+  --bin <path>              where --build-cmd drops the binary, relative to
+                            the project root
+  --config <path>           watched config: change => restart, no rebuild
+                            (repeatable)
+  --env-file <path>         EnvironmentFile= for the service; watched too
+  --run-cmd <cmd>           override ExecStart (default: the artifact)
+  --install-to <dir>        install the working binary there (e.g.
+                            ~/.local/bin when it has a user-facing surface);
+                            default: the project state dir, current/
+  --pull-interval <dur>     pull timer cadence (default 5m)
+  --vcs-stamp               go: keep -buildvcs (honest revision in the
+                            binary; every commit then restarts the service)
+  --user | --system         unit flavor; non-root defaults to --user,
+                            root must pick one explicitly
+  --render-to <dir>         dry generation: render units + manifest into
+                            <dir>; zero systemd, zero network (testing seam
+                            and eyeball-review mode)
+EOF
+}
+
+cmd_gen() {
+  manifest_reset
+  local render_to=
+  while [ $# -gt 0 ]; do
+    case $1 in
+      --name)          M_NAME=$2; shift 2 ;;
+      --repo)          M_REPO=$2; shift 2 ;;
+      --preset)        M_PRESET=$2; shift 2 ;;
+      --package)       M_PACKAGE=$2; shift 2 ;;
+      --component)     M_COMPONENT=$2; shift 2 ;;
+      --entrypoint)    M_ENTRYPOINT=$2; shift 2 ;;
+      --build-cmd)     M_BUILD_CMD=$2; shift 2 ;;
+      --bin)           M_BIN=$2; shift 2 ;;
+      --config)        M_CONFIGS+=("$2"); shift 2 ;;
+      --env-file)      M_ENV_FILE=$2; shift 2 ;;
+      --run-cmd)       M_RUN_CMD=$2; shift 2 ;;
+      --install-to)    M_INSTALL_TO=$2; shift 2 ;;
+      --pull-interval) M_PULL_INTERVAL=$2; shift 2 ;;
+      --vcs-stamp)     M_VCS_STAMP=1; shift ;;
+      --user)          MODE=user; shift ;;
+      --system)        MODE=system; shift ;;
+      --render-to)     render_to=$2; shift 2 ;;
+      *) die "gen: unknown flag $1 (see samosbor help)" ;;
+    esac
+  done
+  resolve_mode
+  M_MODE=$MODE
+
+  [ -n "$M_NAME" ] || die "gen: --name is required"
+  [ -n "$M_REPO" ] || die "gen: --repo is required"
+  case $M_NAME in */*|*' '*) die "gen: --name must be a plain word" ;; esac
+  if [ -n "$M_PRESET" ] && [ -n "$M_BUILD_CMD" ]; then
+    die "gen: --preset and --build-cmd are mutually exclusive"
+  fi
+  if [ -z "$M_PRESET" ]; then
+    [ -n "$M_BUILD_CMD" ] || die "gen: need --preset or --build-cmd"
+    [ -n "$M_BIN" ] || die "gen: --build-cmd requires --bin"
+  fi
+  if [ "$M_PRESET" = python ] && [ -z "$M_ENTRYPOINT" ]; then
+    die "gen: python preset requires --entrypoint"
+  fi
+
+  if [ -n "$render_to" ]; then
+    render_units "$render_to"
+    write_manifest "$render_to/manifest"
+    info "rendered into $render_to (no systemd, no network)"
+    return 0
+  fi
+
+  # Collision: an existing unit that is not ours (no manifest) is refused.
+  if [ -e "$UNIT_DIR/$M_NAME.service" ] && [ ! -f "$STATE_ROOT/$M_NAME/manifest" ]; then
+    die "$UNIT_DIR/$M_NAME.service exists and is not managed by samosbor"
+  fi
+
+  local state; state=$(state_dir)
+  mkdir -p "$state" "$UNIT_DIR"
+  write_manifest "$state/manifest"
+  render_units "$UNIT_DIR"
+
+  do_pull "$M_NAME" initial
+
+  sc daemon-reload
+  sc enable --now "$M_NAME-pull.timer" || info "enabling pull timer failed"
+  if [ -e "$UNIT_DIR/$M_NAME-config.path" ]; then
+    sc enable --now "$M_NAME-config.path" || true
+  fi
+  sc enable --now "$M_NAME.service" || info "service start failed — check journalctl"
+  check_linger
+  info "$M_NAME: generated, enabled and started"
+}
+
+check_linger() {
+  [ "$MODE" = user ] || return 0
+  [ -n "${SAMOSBOR_NO_SYSTEMCTL:-}" ] && return 0
+  command -v loginctl >/dev/null || return 0
+  if [ "$(loginctl show-user "$(id -un)" --property=Linger --value 2>/dev/null)" != yes ]; then
+    info "linger is OFF — services die at logout; fix once with:"
+    info "  sudo loginctl enable-linger $(id -un)"
+  fi
+}
+
+cmd_pull() {
+  while [ $# -gt 0 ]; do
+    case $1 in
+      --user) MODE=user; shift ;;
+      --system) MODE=system; shift ;;
+      *) break ;;
+    esac
+  done
+  [ $# -eq 1 ] || die "usage: samosbor pull [--user|--system] <name>"
+  resolve_mode
+  do_pull "$1"
+}
+
+cmd_regen() {
+  local all= names=()
+  while [ $# -gt 0 ]; do
+    case $1 in
+      --all) all=1; shift ;;
+      --user) MODE=user; shift ;;
+      --system) MODE=system; shift ;;
+      *) names+=("$1"); shift ;;
+    esac
+  done
+  resolve_mode
+  if [ -n "$all" ]; then
+    local m
+    for m in "$STATE_ROOT"/*/manifest; do
+      [ -f "$m" ] || continue
+      names+=("$(basename "$(dirname "$m")")")
+    done
+  fi
+  [ "${#names[@]}" -gt 0 ] || die "regen: give a name or --all"
+  local n
+  for n in "${names[@]}"; do
+    load_manifest "$n"
+    render_units "$UNIT_DIR"
+    info "$n: units restamped"
+  done
+  sc daemon-reload
+}
+
+cmd_list() {
+  local terse=
+  if [ "${1:-}" = --terse ]; then terse=1; fi
+  resolve_mode
+  local m found=
+  for m in "$STATE_ROOT"/*/manifest; do
+    [ -f "$m" ] || continue
+    found=1
+    load_manifest "$(basename "$(dirname "$m")")"
+    local state head enabled active
+    state=$(state_dir)
+    head=$(git -C "$state/src" rev-parse --short HEAD 2>/dev/null || echo '?')
+    enabled=$(sc is-enabled "$M_NAME.service" 2>/dev/null || echo '?')
+    active=$(sc is-active "$M_NAME.service" 2>/dev/null || echo '?')
+    if [ -n "$terse" ]; then
+      printf '%s %s %s %s/%s %s\n' \
+        "$M_NAME" "${M_PRESET:-custom}" "$MODE" "$enabled" "$active" "$head"
+      continue
+    fi
+    printf '%s  (%s, --%s)\n' "$M_NAME" "${M_PRESET:-custom}" "$MODE"
+    printf '  repo:      %s\n' "$M_REPO"
+    printf '  service:   %s / %s\n' "$enabled" "$active"
+    printf '  HEAD:      %s\n' "$head"
+    printf '  artifact:  %s\n' "$([ "$M_PRESET" = python ] && echo "(venv)" || artifact_path)"
+    printf '  last pull: %s\n' "$(cat "$state/last-pull" 2>/dev/null || echo never)"
+    echo
+  done
+  [ -n "$found" ] || info "no projects under $STATE_ROOT"
+}
+
+cmd_uninstall() {
+  local purge= name=
+  while [ $# -gt 0 ]; do
+    case $1 in
+      --purge) purge=1; shift ;;
+      --user) MODE=user; shift ;;
+      --system) MODE=system; shift ;;
+      *) name=$1; shift ;;
+    esac
+  done
+  [ -n "$name" ] || die "usage: samosbor uninstall [--purge] <name>"
+  resolve_mode
+  load_manifest "$name"
+  local u
+  for u in $(project_units); do
+    [ -e "$UNIT_DIR/$u" ] || continue
+    sc disable --now "$u" 2>/dev/null || sc stop "$u" 2>/dev/null || true
+    rm -f "$UNIT_DIR/$u"
+    info "removed $u"
+  done
+  sc daemon-reload
+  if [ -n "$purge" ]; then
+    rm -rf "$(state_dir)"
+    info "$name: state purged"
+  else
+    info "$name: units removed; state kept (regen resurrects the project)"
+  fi
+}
+
+# ---------------------------------------------------------------- dispatch
+
+case ${1:-help} in
+  gen)        shift; cmd_gen "$@" ;;
+  pull)       shift; cmd_pull "$@" ;;
+  regen)      shift; cmd_regen "$@" ;;
+  list)       shift; cmd_list "$@" ;;
+  uninstall)  shift; cmd_uninstall "$@" ;;
+  help|--help|-h) usage ;;
+  *) die "unknown command: $1 (see samosbor help)" ;;
+esac

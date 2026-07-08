@@ -1,0 +1,10 @@
+[Unit]
+Description=legacy: periodic pull (samosbor)
+
+[Timer]
+OnBootSec=2m
+OnUnitActiveSec=10m
+RandomizedDelaySec=30s
+
+[Install]
+WantedBy=timers.target

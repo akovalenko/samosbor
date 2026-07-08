@@ -1,0 +1,13 @@
+[Unit]
+Description=demo (managed by samosbor)
+
+[Service]
+ExecStart=/home/user/.local/state/samosbor/demo/current/demo
+WorkingDirectory=/home/user/.local/state/samosbor/demo
+EnvironmentFile=/etc/demo/env
+Restart=always
+RestartSec=2
+TimeoutStopSec=30
+
+[Install]
+WantedBy=default.target

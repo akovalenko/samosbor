@@ -1,0 +1,6 @@
+[Unit]
+Description=demo: restart on config change (samosbor)
+
+[Service]
+Type=oneshot
+ExecStart=systemctl --user try-restart demo.service

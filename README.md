@@ -1,0 +1,124 @@
+# samosbor
+
+Keep systemd services fresh from git.
+
+`samosbor gen` stamps a per-project set of systemd units that pull a git
+repo on a timer, rebuild it out of tree, and restart the service **only
+when the built artifact actually changed**. systemd does the supervision,
+journaling, crash-loop backoff and file watching; samosbor only generates
+the units and owns the pull/build cycle. One bash file, no dependencies
+beyond git + systemd (+ rsync for the escape hatch).
+
+Born from "services live in tmux because writing units is a chore": both
+chores — writing the units and remembering `enable-linger` — are done by
+the generator.
+
+## Quick start
+
+```sh
+# a Go service, config watched, binary also wanted on PATH
+samosbor gen --name mybot --repo https://github.com/me/mybot \
+  --preset go --config ~/.config/mybot/conf.toml \
+  --install-to ~/.local/bin
+
+# a legacy in-tree Makefile project
+samosbor gen --name legacyd --repo /srv/git/legacyd \
+  --build-cmd 'make -j' --bin out/legacyd
+
+samosbor list            # the fleet, detailed
+samosbor pull mybot      # what the timer runs; safe by hand too
+samosbor uninstall mybot # units gone, state kept (regen resurrects)
+```
+
+Run `samosbor help` for the full flag reference.
+
+## What gets stamped
+
+For `--user` (the default for non-root; unit name == project name, no
+prefix — after `gen` it is just *your* service):
+
+| unit | role |
+|---|---|
+| `<name>.service` | the service: `Restart=always`, `WantedBy=default.target` |
+| `<name>-pull.service` + `.timer` | `samosbor pull <name>` every `--pull-interval` (default 5m, `RandomizedDelaySec` against herds) |
+| `<name>-config.path` + `-config.service` | watched configs / env-file → `try-restart`, no rebuild |
+
+Plus `daemon-reload`, `enable --now` of the set, and a linger check —
+with `loginctl enable-linger` the service runs boot-to-shutdown without a
+single login (the only manual step, samosbor prints the command).
+
+Root gets **no default flavor**: pass `--user` or `--system` explicitly.
+`--system` puts units in `/etc/systemd/system`, state in
+`/var/lib/samosbor`, and the linger dance disappears entirely.
+
+## How pull works
+
+1. **Pristine mirror.** `fetch --prune`; if `HEAD == @{u}` and an artifact
+   is installed — done. Otherwise `reset --hard @{u}` + `clean -ffdx` +
+   the explicit submodule dance (`sync --recursive`, `update --init
+   --recursive --force`, `foreach clean`). Upstream force-push, amend,
+   rebase — absorbed silently. The clone is samosbor's: never edit it.
+2. **Out-of-tree build.** Presets build outside the tree (`GOCACHE`,
+   `--target-dir`, `--builddir`, venv — all under the project's state
+   dir). The escape hatch (`--build-cmd`) runs in an rsync mirror of the
+   tree (`--checksum` keeps mtimes, so `make` stays incremental) — the
+   clone stays pristine even for in-tree build systems.
+   A broken commit never touches the running service: build fails → the
+   old artifact keeps running, noise goes to the journal.
+3. **Gentle replace.** The fresh artifact is byte-compared against the
+   installed one; identical → no restart (a README-only commit never
+   bounces the service). Different → previous kept as `last-good`,
+   atomic rename, `try-restart` — a service you stopped by hand stays
+   stopped. Go preset builds `-trimpath -buildvcs=false` so identical
+   sources give identical bytes; opt out with `--vcs-stamp` if you want
+   the revision stamped into the binary (every commit then restarts).
+
+## State
+
+One root per project — `uninstall --purge` is one `rm -rf`:
+
+```
+~/.local/state/samosbor/<name>/   (--system: /var/lib/samosbor/<name>/)
+  src/        pristine clone (owned by samosbor, never edit)
+  build/      out-of-tree build + caches (gocache, target, dist, venv, tree/)
+  current/    artifact ExecStart points at (unless --install-to)
+  last-good/  previous artifact, manual rollback
+  manifest    resolved gen arguments — regen reads this, nothing is
+              re-derived from the command line
+  last-pull   timestamp + rev + result of the last pull
+```
+
+`--install-to ~/.local/bin` puts the working binary there instead of
+`current/` — for binaries with a user-facing surface besides the daemon
+one. The swap is still atomic, `last-good` still kept in state.
+
+A local path given as `--repo` is only the *origin*: samosbor still
+clones it into state and works on its own copy — the pristine policy
+(`reset --hard` + `clean -ffdx`) would be a disaster on a working copy.
+
+## Presets
+
+- **go** — polished: `go build -trimpath -buildvcs=false -o <state>` with
+  `GOCACHE` in state; full gentle replace.
+- **rust / haskell** — skeletons: `cargo build --release --target-dir` /
+  `cabal build --builddir` + `list-bin`; reproducibility (and hence
+  gentle replace) is best-effort.
+- **python** — no binary artifact: venv in state (`requirements.txt` or
+  `pyproject.toml`), `--entrypoint` is the ExecStart verbatim; restart
+  decision uses the source *tree hash* instead of artifact bytes.
+- **everything else** (C/C++, zoo build systems) — no preset by design:
+  `--build-cmd '...' --bin <path-from-root>`.
+
+## Testing
+
+```sh
+tests/run.sh
+```
+
+No systemd, no network. `gen --render-to <dir>` renders the full unit
+set + manifest into a directory (zero systemd, zero network) — the
+golden tests diff those renders; it doubles as an eyeball-review mode
+before a real `gen`. The smoke test drives the full gen/pull cycle
+against a local origin through the `SAMOSBOR_NO_SYSTEMCTL=1` seam:
+initial build, gentle replace, force-push absorption, `last-good`,
+uninstall/regen resurrection, `--purge`.

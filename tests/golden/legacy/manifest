@@ -1,0 +1,16 @@
+# samosbor manifest — resolved gen arguments (regen reads this)
+M_NAME=legacy
+M_REPO=/srv/git/legacy
+M_PRESET=''
+M_PACKAGE=''
+M_COMPONENT=''
+M_ENTRYPOINT=''
+M_BUILD_CMD=make\ -j
+M_BIN=out/legacyd
+M_RUN_CMD=''
+M_ENV_FILE=''
+M_INSTALL_TO=/home/user/.local/bin
+M_PULL_INTERVAL=10m
+M_VCS_STAMP=0
+M_MODE=user
+M_CONFIGS=()

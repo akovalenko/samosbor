@@ -1,0 +1,6 @@
+[Unit]
+Description=webapp: git pull + rebuild (samosbor)
+
+[Service]
+Type=oneshot
+ExecStart=/usr/local/bin/samosbor pull webapp

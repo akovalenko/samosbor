@@ -1,0 +1,9 @@
+[Unit]
+Description=demo: config watch (samosbor)
+
+[Path]
+PathChanged=/etc/demo/conf.toml
+PathChanged=/etc/demo/env
+
+[Install]
+WantedBy=paths.target

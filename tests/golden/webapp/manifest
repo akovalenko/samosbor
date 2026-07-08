@@ -1,0 +1,16 @@
+# samosbor manifest — resolved gen arguments (regen reads this)
+M_NAME=webapp
+M_REPO=https://example.com/webapp.git
+M_PRESET=python
+M_PACKAGE=''
+M_COMPONENT=''
+M_ENTRYPOINT=/home/user/.local/state/samosbor/webapp/build/venv/bin/python\ -m\ webapp
+M_BUILD_CMD=''
+M_BIN=''
+M_RUN_CMD=''
+M_ENV_FILE=''
+M_INSTALL_TO=''
+M_PULL_INTERVAL=5m
+M_VCS_STAMP=0
+M_MODE=user
+M_CONFIGS=()

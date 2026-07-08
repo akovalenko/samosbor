@@ -1,0 +1,12 @@
+[Unit]
+Description=webapp (managed by samosbor)
+
+[Service]
+ExecStart=/home/user/.local/state/samosbor/webapp/build/venv/bin/python -m webapp
+WorkingDirectory=/home/user/.local/state/samosbor/webapp/src
+Restart=always
+RestartSec=2
+TimeoutStopSec=30
+
+[Install]
+WantedBy=default.target
