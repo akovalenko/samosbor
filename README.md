@@ -73,6 +73,38 @@ Root gets **no default flavor**: pass `--user` or `--system` explicitly.
    sources give identical bytes; opt out with `--vcs-stamp` if you want
    the revision stamped into the binary (every commit then restarts).
 
+## Who starts what
+
+`gen` **converges to enabled + running**: stamp units, initial
+pull/build, `daemon-reload`, `enable --now` the set. On a re-gen only
+units whose text actually changed get a `try-restart` (identical text —
+untouched), and an active service is never double-bounced; but the
+final `enable --now` *does* resurrect a hand-stopped service — gen's
+contract is "make it run". The opt-out is `--no-start`: everything is
+stamped, cloned and built, yet **no unit state is touched** — nothing
+enabled, started or restarted. A fresh `gen --no-start` project is
+fully inert (no timer pulls either); a re-gen with it changes nothing
+that was running *or* stopped. Per-invocation, deliberately not a
+manifest slot: bring the project live with a plain re-gen or
+`systemctl`.
+
+`pull` (what the timer runs) never raises a stopped service:
+`try-restart` only restarts *active* units. A service you stopped by
+hand stays down while pulls keep the artifact fresh — the eventual
+manual start runs the newest build.
+
+`regen` restamps unit files from the manifest plus `daemon-reload`,
+and touches nothing else: no enable, no start, no restart. A running
+process keeps its old text until something restarts it; stopped stays
+stopped, disabled stays disabled.
+
+The service's `WorkingDirectory` defaults to the source clone for
+python and the project state dir otherwise — a least-surprise container
+for the daemon's relative writes, not semantics. `--cwd <dir>`
+overrides; a relative path (including `.`) is captured against *your*
+cwd at `gen` time, so `--cwd . -- -c config.toml` runs the daemon
+where you stand.
+
 ## State
 
 One root per project — `uninstall --purge` is one `rm -rf`:
@@ -101,7 +133,11 @@ is the one-string spelling (there `%h` stays available), `--run-cmd`
 overrides the whole line; the three are mutually exclusive. systemd
 never runs a shell, so a quoted `~` headed for the unit is refused at
 `gen` time instead of failing at runtime — use an absolute path or
-`%h`; the same guard covers `--config`/`--env-file`/`--install-to`.
+`%h`; the same guard covers the path flags
+(`--config`/`--env-file`/`--install-to`/`--cwd`). Those also accept
+*relative* paths, resolved against your cwd at `gen` time and baked
+into the manifest — systemd directives need absolute paths, and
+"relative to wherever the timer woke up" is never what you meant.
 
 A re-gen whose flags actually changed a unit's text try-restarts that
 unit (identical text — no restart, a hand-stopped service stays
