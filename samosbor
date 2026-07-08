@@ -61,7 +61,19 @@ manifest_reset() {
   M_NAME= M_REPO= M_PRESET= M_PACKAGE= M_COMPONENT= M_ENTRYPOINT=
   M_BUILD_CMD= M_BIN= M_RUN_CMD= M_RUN_ARGS= M_ENV_FILE= M_INSTALL_TO=
   M_PULL_INTERVAL=5m M_VCS_STAMP=0 M_MODE=
-  M_CONFIGS=()
+  M_CONFIGS=() M_ENVS=()
+}
+
+# --env NAME captures the value from the gen-time environment (the unit
+# gets it hardcoded — pull runs from a timer with a minimal environment,
+# there is nothing to capture there); NAME=VALUE is taken literally.
+# regen keeps the captured value; re-run gen to refresh it.
+resolve_env() {
+  local spec=$1
+  case $spec in *=*) echo "$spec"; return 0 ;; esac
+  [[ $spec =~ ^[A-Za-z_][A-Za-z0-9_]*$ ]] || die "gen: --env: bad variable name '$spec'"
+  [ -n "${!spec+x}" ] || die "gen: --env $spec: not set in the current environment"
+  echo "$spec=${!spec}"
 }
 
 write_manifest() {
@@ -85,6 +97,9 @@ write_manifest() {
     printf 'M_MODE=%q\n'          "$M_MODE"
     printf 'M_CONFIGS=('
     for c in ${M_CONFIGS[@]+"${M_CONFIGS[@]}"}; do printf '%q ' "$c"; done
+    printf ')\n'
+    printf 'M_ENVS=('
+    for c in ${M_ENVS[@]+"${M_ENVS[@]}"}; do printf '%q ' "$c"; done
     printf ')\n'
   } >"$out"
 }
@@ -127,6 +142,8 @@ render_units() {
     echo "[Service]"
     echo "ExecStart=$(exec_start)"
     echo "WorkingDirectory=$(working_dir)"
+    local e
+    for e in ${M_ENVS[@]+"${M_ENVS[@]}"}; do echo "Environment=\"$e\""; done
     if [ -n "$M_ENV_FILE" ]; then echo "EnvironmentFile=$M_ENV_FILE"; fi
     echo "Restart=always"
     echo "RestartSec=2"
@@ -379,6 +396,11 @@ gen flags:
                             the project root
   --config <path>           watched config: change => restart, no rebuild
                             (repeatable)
+  --env <NAME|NAME=VALUE>   Environment= for the service (repeatable); bare
+                            NAME captures the value from YOUR environment at
+                            gen time and hardcodes it — e.g. --env PATH gives
+                            the daemon your PATH, not the systemd default;
+                            regen keeps it, re-run gen to refresh
   --env-file <path>         EnvironmentFile= for the service; watched too
   --run-cmd <cmd>           override ExecStart (default: the artifact)
   --run-args <args>         appended to the default ExecStart — pass daemon
@@ -412,6 +434,7 @@ cmd_gen() {
       --build-cmd)     M_BUILD_CMD=$2; shift 2 ;;
       --bin)           M_BIN=$2; shift 2 ;;
       --config)        M_CONFIGS+=("$2"); shift 2 ;;
+      --env)           M_ENVS+=("$(resolve_env "$2")"); shift 2 ;;
       --env-file)      M_ENV_FILE=$2; shift 2 ;;
       --run-cmd)       M_RUN_CMD=$2; shift 2 ;;
       --run-args)      M_RUN_ARGS=$2; shift 2 ;;

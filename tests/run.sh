@@ -16,11 +16,13 @@ fail() { echo "FAIL: $*" >&2; exit 1; }
 golden_env=(HOME=/home/user
             XDG_CONFIG_HOME=/home/user/.config
             XDG_STATE_HOME=/home/user/.local/state
-            SAMOSBOR_SELF=/usr/local/bin/samosbor)
+            SAMOSBOR_SELF=/usr/local/bin/samosbor
+            DEMO_TOKEN=s3cr3t)
 
 env "${golden_env[@]}" "$samosbor" gen \
   --name demo --repo https://example.com/demo.git --preset go \
   --config /etc/demo/conf.toml --env-file /etc/demo/env \
+  --env DEMO_TOKEN --env GREETING='hello world' \
   --run-args '--listen :8080 --verbose' \
   --render-to "$tmp/go-demo" 2>/dev/null
 diff -ru "$here/golden/go-demo" "$tmp/go-demo" || fail "golden go-demo diverged"
@@ -36,6 +38,14 @@ env "${golden_env[@]}" "$samosbor" gen \
   --entrypoint '/home/user/.local/state/samosbor/webapp/build/venv/bin/python -m webapp' \
   --render-to "$tmp/webapp" 2>/dev/null
 diff -ru "$here/golden/webapp" "$tmp/webapp" || fail "golden webapp diverged"
+
+# --env with a bare name captures at gen time — a variable that is not
+# set in the gen environment must be refused, not baked in empty.
+if env -u NOPE "${golden_env[@]}" "$samosbor" gen \
+     --name nope --repo https://example.com/nope.git --preset go \
+     --env NOPE --render-to "$tmp/nope" 2>/dev/null; then
+  fail "gen accepted --env for an unset variable"
+fi
 
 # --run-cmd already carries its own args — combining it with --run-args
 # must be refused at gen time.

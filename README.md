@@ -97,6 +97,12 @@ appended to the generated `ExecStart`, so you never need to know where
 the artifact lands. (`--run-cmd` still overrides the whole line; the two
 are mutually exclusive.)
 
+Units run with systemd's own minimal environment, not your shell's —
+`--env PATH` captures *your* value at `gen` time and hardcodes it into
+the unit (bare `--env NAME` for any variable, `--env NAME=VALUE` for a
+literal, repeatable). Captured values live in the manifest: `regen`
+keeps them, re-run `gen` to refresh.
+
 A local path given as `--repo` is only the *origin*: samosbor still
 clones it into state and works on its own copy — the pristine policy
 (`reset --hard` + `clean -ffdx`) would be a disaster on a working copy.

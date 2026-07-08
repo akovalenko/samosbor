@@ -4,6 +4,8 @@ Description=demo (managed by samosbor)
 [Service]
 ExecStart=/home/user/.local/state/samosbor/demo/current/demo --listen :8080 --verbose
 WorkingDirectory=/home/user/.local/state/samosbor/demo
+Environment="DEMO_TOKEN=s3cr3t"
+Environment="GREETING=hello world"
 EnvironmentFile=/etc/demo/env
 Restart=always
 RestartSec=2

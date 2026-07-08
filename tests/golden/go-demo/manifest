@@ -15,3 +15,4 @@ M_PULL_INTERVAL=5m
 M_VCS_STAMP=0
 M_MODE=user
 M_CONFIGS=(/etc/demo/conf.toml )
+M_ENVS=(DEMO_TOKEN=s3cr3t GREETING=hello\ world )
