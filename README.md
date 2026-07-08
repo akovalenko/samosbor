@@ -141,6 +141,13 @@ never runs a shell, so a quoted `~` headed for the unit is refused at
 into the manifest — systemd directives need absolute paths, and
 "relative to wherever the timer woke up" is never what you meant.
 
+More generally, `gen` fails fast on the unusual instead of escaping
+heroically: project names are whitelisted (letters/digits plus `._-`,
+no `@` — that is systemd template syntax — no `%` or spaces),
+ExecStart-bound strings must be one line, unit-bound paths must be
+whitespace-free, `--pull-interval` must parse as a time span, `--bin`
+stays inside the tree.
+
 A re-gen whose flags actually changed a unit's text try-restarts that
 unit (identical text — no restart, a hand-stopped service stays
 stopped), so new args/environment take effect without a manual

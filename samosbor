@@ -64,13 +64,29 @@ manifest_reset() {
   M_CONFIGS=() M_ENVS=()
 }
 
+# The project name IS the unit name and a state path component. Whitelist
+# instead of escaping — @ is systemd template/instance syntax, % is the
+# specifier layer, spaces and metacharacters break word-position sinks
+# (ExecStart=$SELF pull <name>); none of that is worth escaping correctly
+# when a plain name works. Dots stay legal (com.github.foobar), just not
+# leading (hidden state dirs).
+check_name() {
+  [[ $1 =~ ^[A-Za-z0-9][A-Za-z0-9._-]*$ ]] \
+    || die "bad name '$1' — letters/digits plus [._-] inside (no @: systemd template syntax; no %, spaces or metacharacters)"
+}
+
 # --env NAME captures the value from the gen-time environment (the unit
 # gets it hardcoded — pull runs from a timer with a minimal environment,
 # there is nothing to capture there); NAME=VALUE is taken literally.
 # regen keeps the captured value; re-run gen to refresh it.
 resolve_env() {
   local spec=$1
-  case $spec in *=*) echo "$spec"; return 0 ;; esac
+  case $spec in
+    *=*)
+      [[ ${spec%%=*} =~ ^[A-Za-z_][A-Za-z0-9_]*$ ]] \
+        || die "gen: --env: bad variable name '${spec%%=*}'"
+      echo "$spec"; return 0 ;;
+  esac
   [[ $spec =~ ^[A-Za-z_][A-Za-z0-9_]*$ ]] || die "gen: --env: bad variable name '$spec'"
   [ -n "${!spec+x}" ] || die "gen: --env $spec: not set in the current environment"
   echo "$spec=${!spec}"
@@ -108,6 +124,7 @@ write_manifest() {
 
 load_manifest() {
   local name=$1 manifest="$STATE_ROOT/$1/manifest"
+  check_name "$name"  # also guards the path component below
   [ -f "$manifest" ] || die "no manifest for '$name' ($manifest) — not a samosbor project?"
   manifest_reset
   # shellcheck disable=SC1090
@@ -134,6 +151,15 @@ check_no_tilde() {  # $1=flag name, $2=value
   esac
 }
 
+# One value = one unit line: an embedded newline would smuggle extra
+# directives into the unit (ExecStartPost= and friends), and no gen
+# argument has a legitimate use for control characters — fail fast.
+check_one_line() {  # $1=flag name, $2=value
+  case $2 in
+    *[[:cntrl:]]*) die "gen: $1 value contains control characters" ;;
+  esac
+}
+
 # Path flags land in unit directives (EnvironmentFile=, PathChanged=) or
 # get used from timer context (--install-to, --cwd) — both need absolute
 # paths: systemd refuses relative ones, and "relative to wherever the
@@ -142,6 +168,13 @@ check_no_tilde() {  # $1=flag name, $2=value
 # ones the shell already expanded) is refused with the alternatives
 # spelled out.
 resolve_gen_path() {  # $1=flag name, $2=path
+  # Whitespace: EnvironmentFile=/PathChanged= parsing of it is murky and
+  # a spacey --install-to lands unquoted in ExecStart — not 100% sure,
+  # so fail fast rather than escape.
+  case $2 in
+    *[[:space:][:cntrl:]]*)
+      die "gen: $1 path contains whitespace or control characters — refused (lands unquoted in unit directives)" ;;
+  esac
   case $2 in
     /*)   printf '%s\n' "$2" ;;
     '~'*) die "gen: $1 path '$2' starts with ~ — systemd does not expand it; give an absolute path (an unquoted ~ is expanded by your shell)" ;;
@@ -295,7 +328,7 @@ sync_src() {
   local src="$(state_dir)/src"
   if [ ! -d "$src/.git" ]; then
     info "initial clone of $M_REPO"
-    git clone --quiet "$M_REPO" "$src"
+    git clone --quiet -- "$M_REPO" "$src"
   else
     git -C "$src" fetch --prune --quiet
   fi
@@ -477,7 +510,8 @@ Usage:
 
 gen flags:
   --name <name>             service name (required); unit name == project
-                            name, no prefix
+                            name, no prefix; letters/digits plus [._-]
+                            inside — no @ (template syntax), %, spaces
   --repo <url|path>         git repo; a local path is only the origin —
                             samosbor always works on its own pristine clone
   --preset go|rust|haskell|python
@@ -591,7 +625,7 @@ cmd_gen() {
 
   [ -n "$M_NAME" ] || die "gen: --name is required"
   [ -n "$M_REPO" ] || die "gen: --repo is required"
-  case $M_NAME in */*|*' '*) die "gen: --name must be a plain word" ;; esac
+  check_name "$M_NAME"
   if [ -n "$M_PRESET" ] && [ -n "$M_BUILD_CMD" ]; then
     die "gen: --preset and --build-cmd are mutually exclusive"
   fi
@@ -609,7 +643,24 @@ cmd_gen() {
   check_no_tilde --run-args   "$M_RUN_ARGS"
   check_no_tilde --entrypoint "$M_ENTRYPOINT"
   # (The path flags — --config/--env-file/--install-to/--cwd — went through
-  # resolve_gen_path at parse time: quoted ~ refused, relative resolved.)
+  # resolve_gen_path at parse time: quoted ~ refused, relative resolved,
+  # whitespace/control characters rejected.)
+  check_one_line --repo       "$M_REPO"
+  check_one_line --entrypoint "$M_ENTRYPOINT"
+  check_one_line --run-cmd    "$M_RUN_CMD"
+  check_one_line --run-args   "$M_RUN_ARGS"
+  check_one_line --bin        "$M_BIN"
+  # A leading dash would read as an option to go build / cabal.
+  case $M_PACKAGE   in -*) die "gen: --package must not start with a dash" ;; esac
+  case $M_COMPONENT in -*) die "gen: --component must not start with a dash" ;; esac
+  if [ -n "$M_BIN" ]; then
+    case /$M_BIN/ in
+      //*)     die "gen: --bin must be relative to the project root" ;;
+      */../*)  die "gen: --bin must stay inside the tree (no ..)" ;;
+    esac
+  fi
+  [[ $M_PULL_INTERVAL =~ ^([0-9]+(us|ms|s|min|m|h|d|w)?[[:space:]]*)+$ ]] \
+    || die "gen: --pull-interval '$M_PULL_INTERVAL' does not parse as a time span (5m, 90s, '1h 30min')"
   if [ -n "$M_CWD" ] && [ ! -d "$M_CWD" ]; then
     info "warning: --cwd $M_CWD does not exist — the service will fail (200/CHDIR) until it does"
   fi

@@ -80,6 +80,46 @@ if env "${golden_env[@]}" "$samosbor" gen \
   fail "gen accepted a tilde --config path"
 fi
 
+# Unit-name hygiene: @ (systemd template syntax), %, spaces and other
+# metacharacters are refused outright — restriction over escaping. Dots
+# stay legal (com.github.foobar style), just not leading.
+for bad in 'web@prod' 'web app' 'web%x' '.hidden' 'web!io' 'web$1'; do
+  if env "${golden_env[@]}" "$samosbor" gen --name "$bad" \
+       --repo https://example.com/x.git --preset go \
+       --render-to "$tmp/badname" 2>/dev/null; then
+    fail "gen accepted bad --name '$bad'"
+  fi
+done
+env "${golden_env[@]}" "$samosbor" gen --name com.github.foobar \
+  --repo https://example.com/x.git --preset go \
+  --render-to "$tmp/dotted" 2>/dev/null || fail "gen refused a dotted --name"
+
+# Fail fast on the unusual: a newline in an ExecStart-bound string would
+# smuggle extra unit directives; whitespace in a unit-bound path, a
+# malformed time span, a bad env name, a --bin escaping the tree — all
+# refused at gen time instead of failing (or worse) at runtime.
+if env "${golden_env[@]}" "$samosbor" gen --name nl --repo https://example.com/x.git \
+     --preset python --entrypoint "uvicorn app:app
+ExecStartPost=/bin/true" --render-to "$tmp/nl" 2>/dev/null; then
+  fail "gen accepted a newline in --entrypoint"
+fi
+if env "${golden_env[@]}" "$samosbor" gen --name sp --repo https://example.com/x.git \
+     --preset go --config '/etc/app/with space.toml' --render-to "$tmp/sp" 2>/dev/null; then
+  fail "gen accepted whitespace in a --config path"
+fi
+if env "${golden_env[@]}" "$samosbor" gen --name iv --repo https://example.com/x.git \
+     --preset go --pull-interval whenever --render-to "$tmp/iv" 2>/dev/null; then
+  fail "gen accepted a malformed --pull-interval"
+fi
+if env "${golden_env[@]}" "$samosbor" gen --name ev --repo https://example.com/x.git \
+     --preset go --env 'BAD NAME=x' --render-to "$tmp/ev" 2>/dev/null; then
+  fail "gen accepted a bad --env variable name"
+fi
+if env "${golden_env[@]}" "$samosbor" gen --name esc --repo https://example.com/x.git \
+     --build-cmd 'make' --bin '../escape' --render-to "$tmp/esc" 2>/dev/null; then
+  fail "gen accepted a --bin escaping the tree"
+fi
+
 # --run-cmd already carries its own args — combining it with --run-args
 # must be refused at gen time.
 if env "${golden_env[@]}" "$samosbor" gen \
