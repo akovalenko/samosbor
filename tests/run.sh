@@ -107,4 +107,24 @@ mkdir -p "$XDG_CONFIG_HOME/systemd/user"
 [ ! -d "$state" ] || fail "smoke: purge left state"
 
 echo "smoke: OK"
+
+# ---------------------------------------------------------------- go preset
+# Package default falls back to the repo root when cmd/<name> is absent.
+# Needs a go toolchain; skipped (loudly) when there is none.
+if command -v go >/dev/null; then
+  gorigin=$tmp/gorigin
+  mkdir -p "$gorigin"
+  "${G[@]}" -C "$gorigin" init -q -b main
+  printf 'package main\n\nfunc main() { println("rootd") }\n' >"$gorigin/main.go"
+  (cd "$gorigin" && go mod init example.com/rootd >/dev/null 2>&1)
+  "${G[@]}" -C "$gorigin" add -A
+  "${G[@]}" -C "$gorigin" commit -qm v1
+  "$samosbor" gen --name rootd --repo "$gorigin" --preset go 2>/dev/null
+  [ -x "$XDG_STATE_HOME/samosbor/rootd/current/rootd" ] \
+    || fail "go: root-package default built no artifact"
+  echo "go-preset: OK"
+else
+  echo "go-preset: SKIPPED (no go toolchain)"
+fi
+
 echo "PASS"

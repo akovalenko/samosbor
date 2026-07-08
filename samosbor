@@ -231,8 +231,15 @@ build() {
       mkdir -p "${out%/*}" "$state/build/gocache"
       local vcs=(-buildvcs=false)
       if [ "$M_VCS_STAMP" = 1 ]; then vcs=(); fi
+      # Default package: ./cmd/<name> when the repo follows that layout,
+      # otherwise the repo root (main.go at top level). Re-checked every
+      # pull, so an upstream move to cmd/ is picked up on its own.
+      local pkg=$M_PACKAGE
+      if [ -z "$pkg" ]; then
+        if [ -d "$src/cmd/$M_NAME" ]; then pkg=./cmd/$M_NAME; else pkg=.; fi
+      fi
       (cd "$src" && GOCACHE=$state/build/gocache \
-        go build -trimpath ${vcs[@]+"${vcs[@]}"} -o "$out" "${M_PACKAGE:-./cmd/$M_NAME}") || return 1
+        go build -trimpath ${vcs[@]+"${vcs[@]}"} -o "$out" "$pkg") || return 1
       BUILT=$out
       ;;
     rust)
@@ -360,7 +367,8 @@ gen flags:
                             samosbor always works on its own pristine clone
   --preset go|rust|haskell|python
                             build recipe (native out-of-tree)
-    go:      --package <./cmd/x>   package to build (default ./cmd/<name>)
+    go:      --package <./cmd/x>   package to build (default ./cmd/<name>
+                                   if that dir exists, else the repo root)
     rust:    --package <name>      cargo -p in a workspace
     haskell: --component <exe:x>   cabal component (default exe:<name>)
     python:  --entrypoint <cmd>    ExecStart, verbatim (required)

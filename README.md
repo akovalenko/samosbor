@@ -104,7 +104,8 @@ clones it into state and works on its own copy — the pristine policy
 ## Presets
 
 - **go** — polished: `go build -trimpath -buildvcs=false -o <state>` with
-  `GOCACHE` in state; full gentle replace.
+  `GOCACHE` in state; full gentle replace. Default package: `./cmd/<name>`
+  when that dir exists, else the repo root — `--package` overrides.
 - **rust / haskell** — skeletons: `cargo build --release --target-dir` /
   `cabal build --builddir` + `list-bin`; reproducibility (and hence
   gentle replace) is best-effort.
