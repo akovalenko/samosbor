@@ -61,7 +61,7 @@ manifest_reset() {
   M_NAME= M_REPO= M_PRESET= M_PACKAGE= M_COMPONENT= M_ENTRYPOINT= M_PYTHON=
   M_BUILD_CMD= M_BIN= M_RUN_CMD= M_RUN_ARGS= M_ENV_FILE= M_INSTALL_TO= M_CWD=
   M_PULL_INTERVAL=5m M_VCS_STAMP=0 M_MODE=
-  M_CONFIGS=() M_ENVS=()
+  M_CONFIGS=() M_ENVS=() M_PULL_ENVS=()
 }
 
 # The project name IS the unit name and a state path component. Whitelist
@@ -118,6 +118,9 @@ write_manifest() {
     printf ')\n'
     printf 'M_ENVS=('
     for c in ${M_ENVS[@]+"${M_ENVS[@]}"}; do printf '%q ' "$c"; done
+    printf ')\n'
+    printf 'M_PULL_ENVS=('
+    for c in ${M_PULL_ENVS[@]+"${M_PULL_ENVS[@]}"}; do printf '%q ' "$c"; done
     printf ')\n'
   } >"$out"
 }
@@ -269,6 +272,10 @@ render_units() {
     echo "[Service]"
     echo "Type=oneshot"
     echo "ExecStart=$SELF pull$(mode_flag) $M_NAME"
+    # --pull-env: env for the fetch+build oneshot (GIT_SSH_COMMAND, GOPROXY,
+    # a PATH that finds the toolchain), kept off the daemon on purpose.
+    local pe
+    for pe in ${M_PULL_ENVS[@]+"${M_PULL_ENVS[@]}"}; do echo "Environment=\"$(env_quote "$pe")\""; done
   } >"$out/$M_NAME-pull.service"
 
   {
@@ -543,6 +550,14 @@ gen flags:
                             gen time and hardcodes it — e.g. --env PATH gives
                             the daemon your PATH, not the systemd default;
                             regen keeps it, re-run gen to refresh
+  --pull-env <NAME|VALUE>   like --env but into the PULL/BUILD unit, not the
+                            daemon (same capture + literal forms, repeatable):
+                            the home for build-time env — --pull-env PATH so
+                            the timer build finds your toolchain (go/uv/…) and
+                            an ancient system one can't shadow it,
+                            GIT_SSH_COMMAND for a private fetch, GOPROXY. gen
+                            warns when the preset toolchain resolves to a
+                            different binary on the unit's PATH than on yours
   --env-file <path>         EnvironmentFile= for the service; watched too;
                             a leading - (optional file) survives
   --run-cmd <cmd>           override ExecStart (default: the artifact)
@@ -578,6 +593,50 @@ gen flags:
 EOF
 }
 
+# Warn when the timer's build would resolve the preset's toolchain to a
+# DIFFERENT binary than the one on your gen-time PATH — the two classic
+# traps are "the toolchain is not on the unit's PATH at all" and "an
+# ancient system go/python on the default PATH shadows the newer one you
+# actually build with". Best-effort: reads the unit's effective PATH from
+# `systemctl show-environment`, which already folds in environment.d /
+# DefaultEnvironment / set-environment (the overrides we cannot otherwise
+# guess), so it is skipped without a live systemctl. --pull-env PATH is the
+# fix, so when it is set the comparison uses that value.
+check_toolchain_path() {
+  [ -n "${SAMOSBOR_NO_SYSTEMCTL:-}" ] && return 0
+  command -v systemctl >/dev/null 2>&1 || return 0
+  local tool
+  case $M_PRESET in
+    go)      tool=go ;;
+    rust)    tool=cargo ;;
+    haskell) tool=cabal ;;
+    # A bare interpreter is PATH-resolved when the venv is built; an
+    # absolute one is used verbatim, so there is nothing to compare.
+    python)  tool=${M_PYTHON:-python3}; case $tool in /*) return 0 ;; esac ;;
+    *)       return 0 ;;  # custom --build-cmd: no known tool to probe
+  esac
+  local mine; mine=$(command -v "$tool" 2>/dev/null) || mine=
+  # The PATH the pull unit will actually run with: an explicit --pull-env
+  # PATH wins; otherwise the manager's effective environment.
+  local unit_path= pe
+  for pe in ${M_PULL_ENVS[@]+"${M_PULL_ENVS[@]}"}; do
+    case $pe in PATH=*) unit_path=${pe#PATH=} ;; esac
+  done
+  if [ -z "$unit_path" ]; then
+    # Never abort gen over a best-effort probe: a dead user manager makes
+    # show-environment fail, and pipefail would propagate that.
+    unit_path=$("${SC[@]}" show-environment 2>/dev/null | sed -n 's/^PATH=//p') || unit_path=
+  fi
+  [ -n "$unit_path" ] || return 0
+  local theirs; theirs=$(export PATH="$unit_path"; command -v "$tool" 2>/dev/null) || theirs=
+  [ "$mine" = "$theirs" ] && return 0
+  if [ -z "$theirs" ]; then
+    info "warning: '$tool' is not on the pull unit's PATH — the timer build will not find it; pass --pull-env PATH to build with your toolchain"
+  else
+    info "warning: the timer build will run '$theirs', not your '${mine:-$tool}' — pass --pull-env PATH to build with yours"
+  fi
+}
+
 cmd_gen() {
   manifest_reset
   local render_to= no_start=
@@ -606,6 +665,7 @@ cmd_gen() {
       --bin)           M_BIN=$2; shift 2 ;;
       --config)        M_CONFIGS+=("$(resolve_gen_path --config "$2")"); shift 2 ;;
       --env)           M_ENVS+=("$(resolve_env "$2")"); shift 2 ;;
+      --pull-env)      M_PULL_ENVS+=("$(resolve_env "$2")"); shift 2 ;;
       # systemd's optional-file dash survives: -/etc/x and -relative both work.
       --env-file) case $2 in
                     -*) M_ENV_FILE=-$(resolve_gen_path --env-file "${2#-}") ;;
@@ -685,6 +745,8 @@ cmd_gen() {
     info "rendered into $render_to (no systemd, no network)"
     return 0
   fi
+
+  check_toolchain_path
 
   # Collision: an existing unit that is not ours (no manifest) is refused.
   if [ -e "$UNIT_DIR/$M_NAME.service" ] && [ ! -f "$STATE_ROOT/$M_NAME/manifest" ]; then

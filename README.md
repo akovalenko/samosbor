@@ -161,6 +161,27 @@ keeps them, re-run `gen` to refresh. Values land byte-literal: samosbor
 escapes systemd's specifier layer (`%`) and unit quoting for you, and
 `$` is never expanded inside `Environment=` to begin with.
 
+`--env` targets the *daemon*; the **pull/build unit** — the oneshot the
+timer runs to fetch and rebuild — has its own env knob, `--pull-env`
+(same capture and literal forms, repeatable). The split is deliberate:
+build-time and run-time environments are different populations, and
+samosbor keeps the two units apart the way it keeps the build out of the
+run — a daemon secret does not belong in the build unit, and the
+toolchain PATH does not belong on the daemon. `--pull-env` is where
+fetch/build variables go: `GIT_SSH_COMMAND` for a private clone,
+`GOPROXY`, and above all `--pull-env PATH` so the timer build finds
+*your* toolchain. That last one is the common trap — units run with
+systemd's minimal PATH, which routinely omits `/usr/local/go/bin`,
+`~/.cargo/bin`, or a `uv`/`pyenv` python, or (worse) carries an ancient
+system `go` that shadows the one you build with. So `gen` warns at stamp
+time when the preset's toolchain (`go`/`cargo`/`cabal`/the interpreter)
+resolves to a *different* binary on the unit's effective PATH than on
+yours — read from `systemctl show-environment`, so `environment.d` and
+`DefaultEnvironment` overrides are honored, not guessed. Config files the
+toolchain already reads (`~/.ssh/config`, `~/.netrc`, `~/.config/go/env`)
+keep working too: the pull runs with `$HOME` set — `--pull-env` is for
+what those cannot express per-project.
+
 A local path given as `--repo` is only the *origin*: samosbor still
 clones it into state and works on its own copy — the pristine policy
 (`reset --hard` + `clean -ffdx`) would be a disaster on a working copy.

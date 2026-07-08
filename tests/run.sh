@@ -52,6 +52,23 @@ env "${golden_env[@]}" "$samosbor" gen \
   --render-to "$tmp/webabs" 2>/dev/null
 diff -ru "$here/golden/webabs" "$tmp/webabs" || fail "golden webabs diverged"
 
+# --pull-env lands Environment= in the PULL unit, never the daemon: the
+# home for build-time env — a captured PATH so the timer build finds the
+# toolchain, plus a literal GIT_SSH_COMMAND for a private fetch. The
+# gen-time toolchain warning needs a live systemctl, so --render-to skips
+# it (deterministic golden).
+env "${golden_env[@]}" PATH=/opt/go/bin:/usr/bin "$samosbor" gen \
+  --name pullenv --repo https://example.com/pullenv.git --preset go \
+  --pull-env PATH \
+  --pull-env 'GIT_SSH_COMMAND=ssh -i /home/user/.ssh/deploy -o IdentitiesOnly=yes' \
+  --render-to "$tmp/pullenv" 2>/dev/null
+diff -ru "$here/golden/pullenv" "$tmp/pullenv" || fail "golden pullenv diverged"
+grep -q '^Environment="PATH=/opt/go/bin:/usr/bin"$' \
+  "$tmp/pullenv/pullenv-pull.service" || fail "pull-env PATH not in the pull unit"
+if grep -q '^Environment' "$tmp/pullenv/pullenv.service"; then
+  fail "pull-env leaked into the daemon unit"
+fi
+
 # --help in flag position prints usage and exits 0 — the option-shopping
 # flow: build up a gen line, append --help, read what else there is,
 # arrow-up and keep going. (No golden_env: usage() reads $SELF.)

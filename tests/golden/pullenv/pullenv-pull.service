@@ -1,0 +1,8 @@
+[Unit]
+Description=pullenv: git pull + rebuild (samosbor)
+
+[Service]
+Type=oneshot
+ExecStart=/usr/local/bin/samosbor pull pullenv
+Environment="PATH=/opt/go/bin:/usr/bin"
+Environment="GIT_SSH_COMMAND=ssh -i /home/user/.ssh/deploy -o IdentitiesOnly=yes"

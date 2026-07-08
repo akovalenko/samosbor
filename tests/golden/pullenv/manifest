@@ -1,11 +1,11 @@
 # samosbor manifest — resolved gen arguments (regen reads this)
-M_NAME=webabs
-M_REPO=https://example.com/webabs.git
-M_PRESET=python
+M_NAME=pullenv
+M_REPO=https://example.com/pullenv.git
+M_PRESET=go
 M_PACKAGE=''
 M_COMPONENT=''
-M_ENTRYPOINT=/usr/bin/gunicorn\ webabs:app
-M_PYTHON=python3.11
+M_ENTRYPOINT=''
+M_PYTHON=''
 M_BUILD_CMD=''
 M_BIN=''
 M_RUN_CMD=''
@@ -17,5 +17,5 @@ M_PULL_INTERVAL=5m
 M_VCS_STAMP=0
 M_MODE=user
 M_CONFIGS=()
-M_ENVS=(PATH=/opt/tools/bin:/usr/bin )
-M_PULL_ENVS=()
+M_ENVS=()
+M_PULL_ENVS=(PATH=/opt/go/bin:/usr/bin GIT_SSH_COMMAND=ssh\ -i\ /home/user/.ssh/deploy\ -o\ IdentitiesOnly=yes )

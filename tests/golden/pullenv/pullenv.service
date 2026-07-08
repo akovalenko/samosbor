@@ -1,0 +1,12 @@
+[Unit]
+Description=pullenv (managed by samosbor)
+
+[Service]
+ExecStart=/home/user/.local/state/samosbor/pullenv/current/pullenv
+WorkingDirectory=/home/user/.local/state/samosbor/pullenv
+Restart=always
+RestartSec=2
+TimeoutStopSec=30
+
+[Install]
+WantedBy=default.target
