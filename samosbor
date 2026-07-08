@@ -144,6 +144,18 @@ env_quote() {
   printf '%s' "$v"
 }
 
+# One shell word → one ExecStart token. Words arrive from the caller's
+# live shell (tilde/globs already expanded there), so they are meant as
+# literal bytes: % is escaped from specifier expansion, and a word that
+# needs it gets systemd double-quoting. Want %h tricks? That is what the
+# --run-args string form is for.
+unit_word() {
+  case $1 in
+    ''|*[[:space:]\"\'\\]*) printf '"%s"' "$(env_quote "$1")" ;;
+    *) printf '%s' "${1//%/%%}" ;;
+  esac
+}
+
 exec_start() {
   local base
   if   [ -n "$M_RUN_CMD" ];   then base=$M_RUN_CMD
@@ -431,6 +443,11 @@ gen flags:
   --run-args <args>         appended to the default ExecStart — pass daemon
                             flags without knowing where the artifact lands
                             (mutually exclusive with --run-cmd: put them there)
+  -- <args…>                end of flags: the rest is the daemon argv,
+                            word-for-word from your shell (tilde/globs already
+                            expanded there, file completion works); spaces and
+                            quotes survive, % stays a literal byte. The
+                            comfortable spelling of --run-args
   --install-to <dir>        install the working binary there (e.g.
                             ~/.local/bin when it has a user-facing surface);
                             default: the project state dir, current/
@@ -469,6 +486,13 @@ cmd_gen() {
       --user)          MODE=user; shift ;;
       --system)        MODE=system; shift ;;
       --render-to)     render_to=$2; shift 2 ;;
+      --) shift
+          [ $# -gt 0 ] || die "gen: nothing follows --"
+          [ -z "$M_RUN_ARGS" ] || die "gen: --run-args and a -- tail are mutually exclusive"
+          local tw tparts=()
+          for tw in "$@"; do tparts+=("$(unit_word "$tw")"); done
+          M_RUN_ARGS=${tparts[*]}
+          break ;;
       *) die "gen: unknown flag $1 (see samosbor help)" ;;
     esac
   done
@@ -482,7 +506,7 @@ cmd_gen() {
     die "gen: --preset and --build-cmd are mutually exclusive"
   fi
   if [ -n "$M_RUN_CMD" ] && [ -n "$M_RUN_ARGS" ]; then
-    die "gen: --run-cmd and --run-args are mutually exclusive (put the args in --run-cmd)"
+    die "gen: --run-cmd and --run-args/-- are mutually exclusive (put the args in --run-cmd)"
   fi
   if [ -z "$M_PRESET" ]; then
     [ -n "$M_BUILD_CMD" ] || die "gen: need --preset or --build-cmd"
@@ -518,12 +542,32 @@ cmd_gen() {
 
   local state; state=$(state_dir)
   mkdir -p "$state" "$UNIT_DIR"
+  # Snapshot the unit texts: a re-gen whose flags actually changed a unit
+  # try-restarts it below (gentle: identical text => no restart), so new
+  # Environment=/ExecStart take effect without a manual restart.
+  local u
+  local -A before=()
+  for u in $(project_units); do
+    before[$u]=$([ -e "$UNIT_DIR/$u" ] && cksum <"$UNIT_DIR/$u" || echo absent)
+  done
   write_manifest "$state/manifest"
   render_units "$UNIT_DIR"
 
   do_pull "$M_NAME" initial
 
   sc daemon-reload
+  # try-restart BEFORE enable --now: an active unit whose text changed picks
+  # up the new config here (try-restart skips inactive ones — hand-stopped
+  # stays stopped); enable --now below is then a no-op for it, and starts a
+  # first-gen/stopped unit fresh with the new text (no double bounce).
+  for u in $(project_units); do
+    [ "${before[$u]}" = absent ] && continue
+    [ -e "$UNIT_DIR/$u" ] || continue
+    if [ "$(cksum <"$UNIT_DIR/$u")" != "${before[$u]}" ]; then
+      info "$u changed — try-restart"
+      sc try-restart "$u" || info "try-restart $u failed — check journalctl"
+    fi
+  done
   sc enable --now "$M_NAME-pull.timer" || info "enabling pull timer failed"
   if [ -e "$UNIT_DIR/$M_NAME-config.path" ]; then
     sc enable --now "$M_NAME-config.path" || true

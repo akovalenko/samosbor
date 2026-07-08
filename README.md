@@ -18,8 +18,8 @@ the generator.
 ```sh
 # a Go service with daemon flags, config watched, binary also on PATH
 samosbor gen --name mybot --repo https://github.com/me/mybot \
-  --preset go --run-args '--listen :8080' \
-  --config ~/.config/mybot/conf.toml --install-to ~/.local/bin
+  --preset go --config ~/.config/mybot/conf.toml \
+  --install-to ~/.local/bin -- --listen :8080 --state ~/mybot/state.db
 
 # a legacy in-tree Makefile project
 samosbor gen --name legacyd --repo /srv/git/legacyd \
@@ -92,13 +92,21 @@ One root per project — `uninstall --purge` is one `rm -rf`:
 `current/` — for binaries with a user-facing surface besides the daemon
 one. The swap is still atomic, `last-good` still kept in state.
 
-CLI arguments for the daemon go through `--run-args '--listen :8080'` —
-appended to the generated `ExecStart`, so you never need to know where
-the artifact lands. (`--run-cmd` still overrides the whole line; the two
-are mutually exclusive.) systemd never runs a shell, so a `~` that a
-shell would expand is refused at `gen` time instead of landing literal
-in the unit — use an absolute path or `%h`; the same guard covers
-quoted `~/…` in `--config`/`--env-file`/`--install-to`.
+CLI arguments for the daemon: everything after `--` is the daemon's
+argv, appended to the generated `ExecStart` — so you never need to know
+where the artifact lands. The words come from your live shell, so tilde
+expansion and file completion just work; spaces and quotes survive via
+unit quoting, `%` stays a literal byte. `--run-args '--listen :8080'`
+is the one-string spelling (there `%h` stays available), `--run-cmd`
+overrides the whole line; the three are mutually exclusive. systemd
+never runs a shell, so a quoted `~` headed for the unit is refused at
+`gen` time instead of failing at runtime — use an absolute path or
+`%h`; the same guard covers `--config`/`--env-file`/`--install-to`.
+
+A re-gen whose flags actually changed a unit's text try-restarts that
+unit (identical text — no restart, a hand-stopped service stays
+stopped), so new args/environment take effect without a manual
+`systemctl restart`.
 
 Units run with systemd's own minimal environment, not your shell's —
 `--env PATH` captures *your* value at `gen` time and hardcodes it into

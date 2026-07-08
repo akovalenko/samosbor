@@ -31,7 +31,7 @@ diff -ru "$here/golden/go-demo" "$tmp/go-demo" || fail "golden go-demo diverged"
 env "${golden_env[@]}" "$samosbor" gen \
   --name legacy --repo /srv/git/legacy --build-cmd 'make -j' --bin out/legacyd \
   --install-to /home/user/.local/bin --pull-interval 10m \
-  --render-to "$tmp/legacy" 2>/dev/null
+  --render-to "$tmp/legacy" -- --port 9090 --data '/home/user/my data' 2>/dev/null
 diff -ru "$here/golden/legacy" "$tmp/legacy" || fail "golden legacy diverged"
 
 env "${golden_env[@]}" "$samosbor" gen \
@@ -69,6 +69,11 @@ if env "${golden_env[@]}" "$samosbor" gen \
      --run-cmd '/usr/bin/clash --serve' --run-args '--verbose' \
      --render-to "$tmp/clash" 2>/dev/null; then
   fail "gen accepted --run-cmd together with --run-args"
+fi
+if env "${golden_env[@]}" "$samosbor" gen \
+     --name clash --repo https://example.com/clash.git --preset go \
+     --run-args '--verbose' --render-to "$tmp/clash2" -- --port 1 2>/dev/null; then
+  fail "gen accepted --run-args together with a -- tail"
 fi
 
 echo "golden: OK"
@@ -118,6 +123,24 @@ grep -q hello-v1 "$state/last-good/smoked" || fail "smoke: last-good wrong versi
 # No-op pull => fast path
 "$samosbor" pull smoked 2>/dev/null
 grep -q 'result=unchanged' "$state/last-pull" || fail "smoke: fast path missed"
+
+# Re-gen with identical flags => unit texts unchanged => nothing restarted;
+# a re-gen that DOES change the service unit try-restarts exactly it.
+regen_out=$("$samosbor" gen --name smoked --repo "$origin" \
+  --build-cmd 'sh build.sh' --bin smoked 2>&1)
+if grep -q try-restart <<<"$regen_out"; then
+  fail "smoke: same-flags re-gen restarted something"
+fi
+regen_out=$("$samosbor" gen --name smoked --repo "$origin" \
+  --build-cmd 'sh build.sh' --bin smoked -- --verbose 2>&1)
+grep -q 'smoked.service changed — try-restart' <<<"$regen_out" \
+  || fail "smoke: changed service unit not try-restarted"
+if grep -q 'pull.service changed\|pull.timer changed' <<<"$regen_out"; then
+  fail "smoke: unchanged units restarted"
+fi
+grep -q 'ExecStart=.*smoked --verbose' \
+  "$XDG_CONFIG_HOME/systemd/user/smoked.service" \
+  || fail "smoke: -- tail did not land in ExecStart"
 
 # uninstall keeps state, --purge wipes it (unit dir is fake but exercised)
 mkdir -p "$XDG_CONFIG_HOME/systemd/user"

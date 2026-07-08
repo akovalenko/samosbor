@@ -2,7 +2,7 @@
 Description=legacy (managed by samosbor)
 
 [Service]
-ExecStart=/home/user/.local/bin/legacy
+ExecStart=/home/user/.local/bin/legacy --port 9090 --data "/home/user/my data"
 WorkingDirectory=/home/user/.local/state/samosbor/legacy
 Restart=always
 RestartSec=2
