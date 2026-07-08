@@ -52,6 +52,12 @@ env "${golden_env[@]}" "$samosbor" gen \
   --render-to "$tmp/webabs" 2>/dev/null
 diff -ru "$here/golden/webabs" "$tmp/webabs" || fail "golden webabs diverged"
 
+# --help in flag position prints usage and exits 0 — the option-shopping
+# flow: build up a gen line, append --help, read what else there is,
+# arrow-up and keep going. (No golden_env: usage() reads $SELF.)
+"$samosbor" gen --name probe --python zzz --help | grep -q 'gen flags:' \
+  || fail "gen --help did not print usage"
+
 # --env with a bare name captures at gen time — a variable that is not
 # set in the gen environment must be refused, not baked in empty.
 if env -u NOPE "${golden_env[@]}" "$samosbor" gen \
