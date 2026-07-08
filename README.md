@@ -164,6 +164,9 @@ escapes systemd's specifier layer (`%`) and unit quoting for you, and
 A local path given as `--repo` is only the *origin*: samosbor still
 clones it into state and works on its own copy — the pristine policy
 (`reset --hard` + `clean -ffdx`) would be a disaster on a working copy.
+A relative path (`.` included) resolves against your cwd at `gen` time
+and is baked absolute into the manifest — a later re-clone runs from
+timer context, where "relative to what?" has no answer.
 
 ## Presets
 

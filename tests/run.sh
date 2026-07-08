@@ -207,6 +207,14 @@ grep -q "WorkingDirectory=$(readlink -f "$origin")\$" \
   "$XDG_CONFIG_HOME/systemd/user/smoked.service" \
   || fail "smoke: --cwd . did not capture gen-time cwd"
 
+# --repo .: a local-path repo is captured absolute in the manifest (a
+# later re-clone runs from timer context, where "." points at nothing)
+(cd "$origin" && "$samosbor" gen --name smoked --repo . \
+  --build-cmd 'sh build.sh' --bin smoked 2>/dev/null)
+grep -q "^M_REPO=$(readlink -f "$origin")\$" \
+  "$XDG_STATE_HOME/samosbor/smoked/manifest" \
+  || fail "smoke: --repo . did not capture gen-time cwd"
+
 # Relative --env-file/--config resolve the same way (systemd wants
 # absolute paths in EnvironmentFile=/PathChanged=)
 (cd "$origin" && "$samosbor" gen --name smoked --repo "$origin" \

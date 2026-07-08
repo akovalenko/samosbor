@@ -514,6 +514,8 @@ gen flags:
                             inside — no @ (template syntax), %, spaces
   --repo <url|path>         git repo; a local path is only the origin —
                             samosbor always works on its own pristine clone
+                            (a relative path, incl. ., resolves against
+                            your cwd at gen time)
   --preset go|rust|haskell|python
                             build recipe (native out-of-tree)
     go:      --package <./cmd/x>   package to build (default ./cmd/<name>
@@ -582,7 +584,19 @@ cmd_gen() {
   while [ $# -gt 0 ]; do
     case $1 in
       --name)          M_NAME=$2; shift 2 ;;
-      --repo)          M_REPO=$2; shift 2 ;;
+      # A local-path repo (incl. .) is captured absolute: a re-clone runs
+      # from timer context (cwd = / or ~), where a relative path points at
+      # nothing — and list would show a meaningless ".". Anything with a
+      # colon (URL, scp-style remote) passes through untouched; the guard
+      # is conservative — a value that COULD be a remote is never rewritten.
+      --repo)          M_REPO=$2
+                       case $M_REPO in
+                         *:*) ;;
+                         *)   if [ -d "$M_REPO" ]; then
+                                M_REPO=$(readlink -f -- "$M_REPO")
+                              fi ;;
+                       esac
+                       shift 2 ;;
       --preset)        M_PRESET=$2; shift 2 ;;
       --package)       M_PACKAGE=$2; shift 2 ;;
       --component)     M_COMPONENT=$2; shift 2 ;;
