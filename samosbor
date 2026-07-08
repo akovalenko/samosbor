@@ -512,12 +512,16 @@ gen flags:
   --render-to <dir>         dry generation: render units + manifest into
                             <dir>; zero systemd, zero network (testing seam
                             and eyeball-review mode)
+  --no-start                stamp units + clone + build, but touch no unit
+                            state: nothing enabled, started or restarted.
+                            Per-invocation (not remembered): bring the
+                            project live with systemctl or a plain re-gen
 EOF
 }
 
 cmd_gen() {
   manifest_reset
-  local render_to=
+  local render_to= no_start=
   while [ $# -gt 0 ]; do
     case $1 in
       --name)          M_NAME=$2; shift 2 ;;
@@ -546,6 +550,7 @@ cmd_gen() {
       --user)          MODE=user; shift ;;
       --system)        MODE=system; shift ;;
       --render-to)     render_to=$2; shift 2 ;;
+      --no-start)      no_start=1; shift ;;
       --help|-h)       usage; exit 0 ;;
       --) shift
           [ $# -gt 0 ] || die "gen: nothing follows --"
@@ -620,6 +625,13 @@ cmd_gen() {
   do_pull "$M_NAME" initial
 
   sc daemon-reload
+  # --no-start: everything above happened (units stamped, manifest written,
+  # cloned and built) but no unit state is touched — nothing enabled,
+  # started or restarted. Bring it live later: systemctl, or a plain re-gen.
+  if [ -n "$no_start" ]; then
+    info "$M_NAME: generated and built (--no-start: unit state untouched)"
+    return 0
+  fi
   # try-restart BEFORE enable --now: an active unit whose text changed picks
   # up the new config here (try-restart skips inactive ones — hand-stopped
   # stays stopped); enable --now below is then a no-op for it, and starts a

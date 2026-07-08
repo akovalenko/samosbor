@@ -167,6 +167,20 @@ grep -q "WorkingDirectory=$(readlink -f "$origin")\$" \
   "$XDG_CONFIG_HOME/systemd/user/smoked.service" \
   || fail "smoke: --cwd . did not capture gen-time cwd"
 
+# --no-start: stamp + clone + build, but unit state untouched (nothing
+# enabled, started or restarted); a later plain re-gen goes live.
+nostart_out=$("$samosbor" gen --name inert --repo "$origin" \
+  --build-cmd 'sh build.sh' --bin smoked --no-start 2>&1)
+if grep -Eq 'enable --now|try-restart' <<<"$nostart_out"; then
+  fail "smoke: --no-start touched unit state"
+fi
+[ -x "$XDG_STATE_HOME/samosbor/inert/current/inert" ] \
+  || fail "smoke: --no-start skipped the build"
+golive_out=$("$samosbor" gen --name inert --repo "$origin" \
+  --build-cmd 'sh build.sh' --bin smoked 2>&1)
+grep -q 'enable --now inert.service' <<<"$golive_out" \
+  || fail "smoke: plain re-gen after --no-start did not go live"
+
 # uninstall keeps state, --purge wipes it (unit dir is fake but exercised)
 mkdir -p "$XDG_CONFIG_HOME/systemd/user"
 "$samosbor" regen smoked 2>/dev/null
