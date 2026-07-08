@@ -1,0 +1,15 @@
+[Unit]
+Description=webabs (managed by samosbor)
+
+[Service]
+ExecStart=/usr/bin/gunicorn webabs:app
+WorkingDirectory=/home/user/.local/state/samosbor/webabs/src
+Environment="VIRTUAL_ENV=/home/user/.local/state/samosbor/webabs/build/venv"
+Environment="PATH=/home/user/.local/state/samosbor/webabs/build/venv/bin:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin"
+Environment="PATH=/opt/tools/bin:/usr/bin"
+Restart=always
+RestartSec=2
+TimeoutStopSec=30
+
+[Install]
+WantedBy=default.target

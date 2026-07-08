@@ -116,6 +116,7 @@ load_manifest() {
 state_dir()     { echo "$STATE_ROOT/$M_NAME"; }
 artifact_dir()  { echo "${M_INSTALL_TO:-$STATE_ROOT/$M_NAME/current}"; }
 artifact_path() { echo "$(artifact_dir)/$M_NAME"; }
+venv_dir()      { echo "$(state_dir)/build/venv"; }
 
 # ---------------------------------------------------------------- rendering
 
@@ -156,10 +157,20 @@ unit_word() {
   esac
 }
 
+# A bare (non-absolute) python entrypoint anchors in the project venv:
+# the venv is samosbor's own internal path, so the user names the console
+# script (uvicorn, python) and the render supplies where it lives. The
+# relative form had no useful meaning anyway — systemd resolves a bare
+# ExecStart word against a compile-time path, never the unit's own PATH,
+# so it could only ever grab a system binary instead of the venv one.
 exec_start() {
   local base
   if   [ -n "$M_RUN_CMD" ];   then base=$M_RUN_CMD
-  elif [ "$M_PRESET" = python ]; then base=$M_ENTRYPOINT
+  elif [ "$M_PRESET" = python ]; then
+    case $M_ENTRYPOINT in
+      /*) base=$M_ENTRYPOINT ;;
+      *)  base=$(venv_dir)/bin/$M_ENTRYPOINT ;;
+    esac
   else base=$(artifact_path); fi
   echo "$base${M_RUN_ARGS:+ $M_RUN_ARGS}"
 }
@@ -180,6 +191,15 @@ render_units() {
     echo "ExecStart=$(exec_start)"
     echo "WorkingDirectory=$(working_dir)"
     local e
+    # python runs "as if the venv were activated": VIRTUAL_ENV + venv-first
+    # PATH for the tools the app spawns. Emitted BEFORE the user's --env
+    # lines — for a repeated variable systemd takes the later setting, so
+    # an explicit --env PATH=… still wins.
+    if [ "$M_PRESET" = python ]; then
+      local venv; venv=$(venv_dir)
+      echo "Environment=\"$(env_quote "VIRTUAL_ENV=$venv")\""
+      echo "Environment=\"$(env_quote "PATH=$venv/bin:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin")\""
+    fi
     for e in ${M_ENVS[@]+"${M_ENVS[@]}"}; do echo "Environment=\"$(env_quote "$e")\""; done
     if [ -n "$M_ENV_FILE" ]; then echo "EnvironmentFile=$M_ENV_FILE"; fi
     echo "Restart=always"
@@ -306,7 +326,7 @@ build() {
       BUILT=$(cd "$src" && cabal list-bin --builddir="$state/build/dist" "${M_COMPONENT:-exe:$M_NAME}") || return 1
       ;;
     python)
-      local venv=$state/build/venv
+      local venv; venv=$(venv_dir)
       [ -d "$venv" ] || python3 -m venv "$venv"
       if   [ -f "$src/requirements.txt" ]; then "$venv/bin/pip" install -q -r "$src/requirements.txt"
       elif [ -f "$src/pyproject.toml"   ]; then "$venv/bin/pip" install -q -e "$src"
@@ -425,7 +445,10 @@ gen flags:
                                    if that dir exists, else the repo root)
     rust:    --package <name>      cargo -p in a workspace
     haskell: --component <exe:x>   cabal component (default exe:<name>)
-    python:  --entrypoint <cmd>    ExecStart, verbatim (required)
+    python:  --entrypoint <cmd>    ExecStart (required); a bare command
+                                   resolves in the project venv (e.g.
+                                   'uvicorn app:app', 'python -m x'), an
+                                   absolute path is taken verbatim
   --build-cmd <cmd>         escape hatch for make/build.sh zoos: runs in a
                             tree mirror under build/tree/, clone stays
                             pristine, make stays incremental

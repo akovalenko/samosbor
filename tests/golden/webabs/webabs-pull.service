@@ -1,0 +1,6 @@
+[Unit]
+Description=webabs: git pull + rebuild (samosbor)
+
+[Service]
+Type=oneshot
+ExecStart=/usr/local/bin/samosbor pull webabs

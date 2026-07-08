@@ -129,8 +129,13 @@ clones it into state and works on its own copy — the pristine policy
   `cabal build --builddir` + `list-bin`; reproducibility (and hence
   gentle replace) is best-effort.
 - **python** — no binary artifact: venv in state (`requirements.txt` or
-  `pyproject.toml`), `--entrypoint` is the ExecStart verbatim; restart
-  decision uses the source *tree hash* instead of artifact bytes.
+  `pyproject.toml`); restart decision uses the source *tree hash* instead
+  of artifact bytes. `--entrypoint` is the ExecStart; a bare command
+  resolves in the project venv (`--entrypoint 'uvicorn app:app'` — where
+  the venv lives is samosbor's business), an absolute path is taken
+  verbatim. The unit also gets `VIRTUAL_ENV` and a venv-first `PATH`, so
+  the service runs as if the venv were activated; an explicit
+  `--env PATH=…` still overrides.
 - **everything else** (C/C++, zoo build systems) — no preset by design:
   `--build-cmd '...' --bin <path-from-root>`.
 

@@ -1,10 +1,10 @@
 # samosbor manifest — resolved gen arguments (regen reads this)
-M_NAME=webapp
-M_REPO=https://example.com/webapp.git
+M_NAME=webabs
+M_REPO=https://example.com/webabs.git
 M_PRESET=python
 M_PACKAGE=''
 M_COMPONENT=''
-M_ENTRYPOINT=python\ -m\ webapp
+M_ENTRYPOINT=/usr/bin/gunicorn\ webabs:app
 M_BUILD_CMD=''
 M_BIN=''
 M_RUN_CMD=''
@@ -15,4 +15,4 @@ M_PULL_INTERVAL=5m
 M_VCS_STAMP=0
 M_MODE=user
 M_CONFIGS=()
-M_ENVS=()
+M_ENVS=(PATH=/opt/tools/bin:/usr/bin )

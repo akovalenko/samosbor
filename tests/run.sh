@@ -34,11 +34,22 @@ env "${golden_env[@]}" "$samosbor" gen \
   --render-to "$tmp/legacy" -- --port 9090 --data '/home/user/my data' 2>/dev/null
 diff -ru "$here/golden/legacy" "$tmp/legacy" || fail "golden legacy diverged"
 
+# Bare entrypoint anchors in the project venv — the user never needs to
+# know where samosbor keeps it.
 env "${golden_env[@]}" "$samosbor" gen \
   --name webapp --repo https://example.com/webapp.git --preset python \
-  --entrypoint '/home/user/.local/state/samosbor/webapp/build/venv/bin/python -m webapp' \
+  --entrypoint 'python -m webapp' \
   --render-to "$tmp/webapp" 2>/dev/null
 diff -ru "$here/golden/webapp" "$tmp/webapp" || fail "golden webapp diverged"
+
+# Absolute entrypoint stays verbatim; an explicit --env PATH lands after
+# the synthetic venv PATH, so it wins (systemd: later setting overrides).
+env "${golden_env[@]}" "$samosbor" gen \
+  --name webabs --repo https://example.com/webabs.git --preset python \
+  --entrypoint '/usr/bin/gunicorn webabs:app' \
+  --env PATH=/opt/tools/bin:/usr/bin \
+  --render-to "$tmp/webabs" 2>/dev/null
+diff -ru "$here/golden/webabs" "$tmp/webabs" || fail "golden webabs diverged"
 
 # --env with a bare name captures at gen time — a variable that is not
 # set in the gen environment must be refused, not baked in empty.
