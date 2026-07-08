@@ -321,7 +321,7 @@ build() {
   case $M_PRESET in
     go)
       out=$state/build/out/$M_NAME
-      mkdir -p "${out%/*}" "$state/build/gocache"
+      mkdir -p "${out%/*}"
       local vcs=(-buildvcs=false)
       if [ "$M_VCS_STAMP" = 1 ]; then vcs=(); fi
       # Default package: ./cmd/<name> when the repo follows that layout,
@@ -331,8 +331,7 @@ build() {
       if [ -z "$pkg" ]; then
         if [ -d "$src/cmd/$M_NAME" ]; then pkg=./cmd/$M_NAME; else pkg=.; fi
       fi
-      (cd "$src" && GOCACHE=$state/build/gocache \
-        go build -trimpath ${vcs[@]+"${vcs[@]}"} -o "$out" "$pkg") || return 1
+      (cd "$src" && go build -trimpath ${vcs[@]+"${vcs[@]}"} -o "$out" "$pkg") || return 1
       BUILT=$out
       ;;
     rust)
@@ -424,6 +423,12 @@ do_pull() {  # $1=name, $2=initial (optional)
   load_manifest "$name"
   local state; state=$(state_dir)
   mkdir -p "$state"
+  # A --system timer runs without $HOME (no User= — systemd sets it only
+  # then), and toolchains derive their shared caches from it (go: GOCACHE
+  # and GOPATH). Fill it from the passwd entry instead of relocating the
+  # caches per-project: shared caches stay warm and are the toolchain's
+  # own business to trim.
+  export HOME=${HOME:-$(getent passwd "$(id -u)" | cut -d: -f6)}
 
   sync_src
   # Fast path: nothing new and an artifact is already installed.

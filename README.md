@@ -58,11 +58,13 @@ Root gets **no default flavor**: pass `--user` or `--system` explicitly.
    the explicit submodule dance (`sync --recursive`, `update --init
    --recursive --force`, `foreach clean`). Upstream force-push, amend,
    rebase — absorbed silently. The clone is samosbor's: never edit it.
-2. **Out-of-tree build.** Presets build outside the tree (`GOCACHE`,
-   `--target-dir`, `--builddir`, venv — all under the project's state
-   dir). The escape hatch (`--build-cmd`) runs in an rsync mirror of the
-   tree (`--checksum` keeps mtimes, so `make` stays incremental) — the
-   clone stays pristine even for in-tree build systems.
+2. **Out-of-tree build.** Build *outputs* land under the project's state
+   dir (`-o`, `--target-dir`, `--builddir`, the venv); toolchain *caches*
+   stay the machine's own (go build cache, cargo registry, pip cache) —
+   shared and warm, trimmed by their owners. The escape hatch
+   (`--build-cmd`) runs in an rsync mirror of the tree (`--checksum`
+   keeps mtimes, so `make` stays incremental) — the clone stays pristine
+   even for in-tree build systems.
    A broken commit never touches the running service: build fails → the
    old artifact keeps running, noise goes to the journal.
 3. **Gentle replace.** The fresh artifact is byte-compared against the
@@ -112,7 +114,7 @@ One root per project — `uninstall --purge` is one `rm -rf`:
 ```
 ~/.local/state/samosbor/<name>/   (--system: /var/lib/samosbor/<name>/)
   src/        pristine clone (owned by samosbor, never edit)
-  build/      out-of-tree build + caches (gocache, target, dist, venv, tree/)
+  build/      out-of-tree build outputs (out/, target, dist, venv, tree/)
   current/    artifact ExecStart points at (unless --install-to)
   last-good/  previous artifact, manual rollback
   manifest    resolved gen arguments — regen reads this, nothing is
@@ -158,9 +160,9 @@ clones it into state and works on its own copy — the pristine policy
 
 ## Presets
 
-- **go** — polished: `go build -trimpath -buildvcs=false -o <state>` with
-  `GOCACHE` in state; full gentle replace. Default package: `./cmd/<name>`
-  when that dir exists, else the repo root — `--package` overrides.
+- **go** — polished: `go build -trimpath -buildvcs=false -o <state>`;
+  full gentle replace. Default package: `./cmd/<name>` when that dir
+  exists, else the repo root — `--package` overrides.
 - **rust / haskell** — skeletons: `cargo build --release --target-dir` /
   `cabal build --builddir` + `list-bin`; reproducibility (and hence
   gentle replace) is best-effort.
