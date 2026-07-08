@@ -44,9 +44,10 @@ diff -ru "$here/golden/webapp" "$tmp/webapp" || fail "golden webapp diverged"
 
 # Absolute entrypoint stays verbatim; an explicit --env PATH lands after
 # the synthetic venv PATH, so it wins (systemd: later setting overrides).
+# --python only lands in the manifest — the venv is a pull-time affair.
 env "${golden_env[@]}" "$samosbor" gen \
   --name webabs --repo https://example.com/webabs.git --preset python \
-  --entrypoint '/usr/bin/gunicorn webabs:app' \
+  --entrypoint '/usr/bin/gunicorn webabs:app' --python python3.11 \
   --env PATH=/opt/tools/bin:/usr/bin \
   --render-to "$tmp/webabs" 2>/dev/null
 diff -ru "$here/golden/webabs" "$tmp/webabs" || fail "golden webabs diverged"
@@ -184,6 +185,40 @@ if command -v go >/dev/null; then
   echo "go-preset: OK"
 else
   echo "go-preset: SKIPPED (no go toolchain)"
+fi
+
+# ---------------------------------------------------------------- python preset
+# venv-anchored entrypoint: bin/python always exists in the venv (even on
+# hosts with no bare `python`); a bad bare entrypoint warns at build time;
+# a changed --python rebuilds the venv. No requirements file — no network.
+if command -v python3 >/dev/null; then
+  porigin=$tmp/porigin
+  mkdir -p "$porigin"
+  "${G[@]}" -C "$porigin" init -q -b main
+  printf 'print("hi")\n' >"$porigin/app.py"
+  "${G[@]}" -C "$porigin" add -A
+  "${G[@]}" -C "$porigin" commit -qm v1
+
+  pyout=$("$samosbor" gen --name pyapp --repo "$porigin" --preset python \
+    --entrypoint 'python app.py' 2>&1)
+  pyvenv=$XDG_STATE_HOME/samosbor/pyapp/build/venv
+  [ -x "$pyvenv/bin/python" ] || fail "python: venv has no bin/python"
+  grep -q "ExecStart=$pyvenv/bin/python app.py" \
+    "$XDG_CONFIG_HOME/systemd/user/pyapp.service" \
+    || fail "python: entrypoint not anchored in the venv"
+  if grep -q 'is not in the venv' <<<"$pyout"; then
+    fail "python: spurious entrypoint warning"
+  fi
+
+  pyout=$("$samosbor" gen --name pyapp --repo "$porigin" --preset python \
+    --entrypoint 'nosuchtool --serve' --python "$(command -v python3)" 2>&1)
+  grep -q 'rebuilding with' <<<"$pyout" \
+    || fail "python: --python change did not rebuild the venv"
+  grep -q "'nosuchtool' is not in the venv" <<<"$pyout" \
+    || fail "python: missing-entrypoint warning absent"
+  echo "python-preset: OK"
+else
+  echo "python-preset: SKIPPED (no python3)"
 fi
 
 echo "PASS"

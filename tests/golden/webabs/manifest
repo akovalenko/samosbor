@@ -5,6 +5,7 @@ M_PRESET=python
 M_PACKAGE=''
 M_COMPONENT=''
 M_ENTRYPOINT=/usr/bin/gunicorn\ webabs:app
+M_PYTHON=python3.11
 M_BUILD_CMD=''
 M_BIN=''
 M_RUN_CMD=''

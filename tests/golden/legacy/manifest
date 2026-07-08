@@ -5,6 +5,7 @@ M_PRESET=''
 M_PACKAGE=''
 M_COMPONENT=''
 M_ENTRYPOINT=''
+M_PYTHON=''
 M_BUILD_CMD=make\ -j
 M_BIN=out/legacyd
 M_RUN_CMD=''

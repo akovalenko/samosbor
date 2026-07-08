@@ -58,7 +58,7 @@ mode_flag() { [ "$MODE" = system ] && echo " --system" || true; }
 # bash-sourceable file into the project state dir. regen/pull/list/uninstall
 # read it back — nothing is ever re-derived from the command line.
 manifest_reset() {
-  M_NAME= M_REPO= M_PRESET= M_PACKAGE= M_COMPONENT= M_ENTRYPOINT=
+  M_NAME= M_REPO= M_PRESET= M_PACKAGE= M_COMPONENT= M_ENTRYPOINT= M_PYTHON=
   M_BUILD_CMD= M_BIN= M_RUN_CMD= M_RUN_ARGS= M_ENV_FILE= M_INSTALL_TO=
   M_PULL_INTERVAL=5m M_VCS_STAMP=0 M_MODE=
   M_CONFIGS=() M_ENVS=()
@@ -86,6 +86,7 @@ write_manifest() {
     printf 'M_PACKAGE=%q\n'       "$M_PACKAGE"
     printf 'M_COMPONENT=%q\n'     "$M_COMPONENT"
     printf 'M_ENTRYPOINT=%q\n'    "$M_ENTRYPOINT"
+    printf 'M_PYTHON=%q\n'        "$M_PYTHON"
     printf 'M_BUILD_CMD=%q\n'     "$M_BUILD_CMD"
     printf 'M_BIN=%q\n'           "$M_BIN"
     printf 'M_RUN_CMD=%q\n'       "$M_RUN_CMD"
@@ -326,11 +327,28 @@ build() {
       BUILT=$(cd "$src" && cabal list-bin --builddir="$state/build/dist" "${M_COMPONENT:-exe:$M_NAME}") || return 1
       ;;
     python)
-      local venv; venv=$(venv_dir)
-      [ -d "$venv" ] || python3 -m venv "$venv"
+      local venv py w
+      venv=$(venv_dir); py=${M_PYTHON:-python3}
+      # The venv is created once — but it is created BY an interpreter,
+      # so a changed --python must rebuild it, or the new pin never lands.
+      if [ -d "$venv" ] && [ "$(cat "$venv/.built-by" 2>/dev/null)" != "$py" ]; then
+        info "venv built by a different python — rebuilding with $py"
+        rm -rf "$venv"
+      fi
+      if [ ! -d "$venv" ]; then
+        "$py" -m venv "$venv" || return 1
+        printf '%s\n' "$py" >"$venv/.built-by"
+      fi
       if   [ -f "$src/requirements.txt" ]; then "$venv/bin/pip" install -q -r "$src/requirements.txt"
       elif [ -f "$src/pyproject.toml"   ]; then "$venv/bin/pip" install -q -e "$src"
       fi
+      # A bad ExecStart is otherwise invisible until the unit dies with
+      # 203/EXEC — check while the build is looking at the venv anyway.
+      case $M_ENTRYPOINT in
+        /*) ;;
+        *) w=${M_ENTRYPOINT%% *}
+           [ -x "$venv/bin/$w" ] || info "warning: '$w' is not in the venv — the service will not start (typo in --entrypoint? dependency missing from requirements?)" ;;
+      esac
       ;;
     '')
       # Escape hatch: the build command always runs in a tree mirror, so
@@ -449,6 +467,9 @@ gen flags:
                                    resolves in the project venv (e.g.
                                    'uvicorn app:app', 'python -m x'), an
                                    absolute path is taken verbatim
+             --python <exe>        interpreter the venv is built with
+                                   (default python3); a change rebuilds
+                                   the venv on the next pull
   --build-cmd <cmd>         escape hatch for make/build.sh zoos: runs in a
                             tree mirror under build/tree/, clone stays
                             pristine, make stays incremental
@@ -496,6 +517,7 @@ cmd_gen() {
       --package)       M_PACKAGE=$2; shift 2 ;;
       --component)     M_COMPONENT=$2; shift 2 ;;
       --entrypoint)    M_ENTRYPOINT=$2; shift 2 ;;
+      --python)        M_PYTHON=$2; shift 2 ;;
       --build-cmd)     M_BUILD_CMD=$2; shift 2 ;;
       --bin)           M_BIN=$2; shift 2 ;;
       --config)        M_CONFIGS+=("$2"); shift 2 ;;

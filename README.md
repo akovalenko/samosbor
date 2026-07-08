@@ -135,7 +135,11 @@ clones it into state and works on its own copy — the pristine policy
   the venv lives is samosbor's business), an absolute path is taken
   verbatim. The unit also gets `VIRTUAL_ENV` and a venv-first `PATH`, so
   the service runs as if the venv were activated; an explicit
-  `--env PATH=…` still overrides.
+  `--env PATH=…` still overrides. `--python <exe>` picks the interpreter
+  the venv is built with (default `python3`); changing it rebuilds the
+  venv. A bare entrypoint missing from the venv draws a build-time
+  warning (typo, or a dependency missing from requirements) instead of a
+  silent 203/EXEC at service start.
 - **everything else** (C/C++, zoo build systems) — no preset by design:
   `--build-cmd '...' --bin <path-from-root>`.
 
