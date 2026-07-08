@@ -119,6 +119,18 @@ artifact_path() { echo "$(artifact_dir)/$M_NAME"; }
 
 # ---------------------------------------------------------------- rendering
 
+# systemd never runs a shell, so a shell-position tilde (word-leading,
+# or right after =) in a line destined for the unit lands literal and
+# the daemon gets a path that does not exist. The mistake is invisible
+# until runtime — refuse it at gen time with the alternatives spelled
+# out. A mid-word ~ (sed s~a~b~ etc.) is left alone.
+check_no_tilde() {  # $1=flag name, $2=value
+  case " $2" in
+    *' ~'*|*'=~'*)
+      die "gen: $1 value contains a shell tilde — systemd does not expand ~; use an absolute path or %h (user unit home)" ;;
+  esac
+}
+
 # Environment= values are meant byte-literal, so escape what systemd
 # would interpret: the specifier layer (% → %%) and the C-style quoting
 # layer (backslash, double quote, newline). $ needs nothing — systemd
@@ -479,6 +491,18 @@ cmd_gen() {
   if [ "$M_PRESET" = python ] && [ -z "$M_ENTRYPOINT" ]; then
     die "gen: python preset requires --entrypoint"
   fi
+  check_no_tilde --run-cmd    "$M_RUN_CMD"
+  check_no_tilde --run-args   "$M_RUN_ARGS"
+  check_no_tilde --entrypoint "$M_ENTRYPOINT"
+  # Same trap for the path flags that land in unit directives (PathChanged=,
+  # EnvironmentFile=): a QUOTED ~/... arrives here literal (unquoted ones the
+  # shell already expanded) and systemd will not expand it either.
+  local p
+  for p in "$M_ENV_FILE" "$M_INSTALL_TO" ${M_CONFIGS[@]+"${M_CONFIGS[@]}"}; do
+    case $p in
+      '~'*) die "gen: path '$p' starts with ~ — systemd does not expand it; give an absolute path (an unquoted ~ is expanded by your shell)" ;;
+    esac
+  done
 
   if [ -n "$render_to" ]; then
     render_units "$render_to"

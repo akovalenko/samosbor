@@ -95,7 +95,10 @@ one. The swap is still atomic, `last-good` still kept in state.
 CLI arguments for the daemon go through `--run-args '--listen :8080'` —
 appended to the generated `ExecStart`, so you never need to know where
 the artifact lands. (`--run-cmd` still overrides the whole line; the two
-are mutually exclusive.)
+are mutually exclusive.) systemd never runs a shell, so a `~` that a
+shell would expand is refused at `gen` time instead of landing literal
+in the unit — use an absolute path or `%h`; the same guard covers
+quoted `~/…` in `--config`/`--env-file`/`--install-to`.
 
 Units run with systemd's own minimal environment, not your shell's —
 `--env PATH` captures *your* value at `gen` time and hardcodes it into

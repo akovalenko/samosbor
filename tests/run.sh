@@ -48,6 +48,20 @@ if env -u NOPE "${golden_env[@]}" "$samosbor" gen \
   fail "gen accepted --env for an unset variable"
 fi
 
+# systemd does not expand ~ — a shell-position tilde in an Exec-bound
+# value, or a (quoted) ~/path in a unit-bound path flag, must be refused
+# at gen time instead of landing literal in the unit.
+if env "${golden_env[@]}" "$samosbor" gen \
+     --name tilde --repo https://example.com/tilde.git --preset go \
+     --run-args '--config ~/x.toml' --render-to "$tmp/tilde1" 2>/dev/null; then
+  fail "gen accepted a tilde in --run-args"
+fi
+if env "${golden_env[@]}" "$samosbor" gen \
+     --name tilde --repo https://example.com/tilde.git --preset go \
+     --config '~/conf.toml' --render-to "$tmp/tilde2" 2>/dev/null; then
+  fail "gen accepted a tilde --config path"
+fi
+
 # --run-cmd already carries its own args — combining it with --run-args
 # must be refused at gen time.
 if env "${golden_env[@]}" "$samosbor" gen \
