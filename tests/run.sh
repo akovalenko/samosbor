@@ -30,6 +30,7 @@ diff -ru "$here/golden/go-demo" "$tmp/go-demo" || fail "golden go-demo diverged"
 
 env "${golden_env[@]}" "$samosbor" gen \
   --name legacy --repo /srv/git/legacy --build-cmd 'make -j' --bin out/legacyd \
+  --branch stable \
   --install-to /home/user/.local/bin --pull-interval 10m --cwd /srv/legacy-data \
   --render-to "$tmp/legacy" -- --port 9090 --data '/home/user/my data' 2>/dev/null
 diff -ru "$here/golden/legacy" "$tmp/legacy" || fail "golden legacy diverged"
@@ -135,6 +136,10 @@ fi
 if env "${golden_env[@]}" "$samosbor" gen --name esc --repo https://example.com/x.git \
      --build-cmd 'make' --bin '../escape' --render-to "$tmp/esc" 2>/dev/null; then
   fail "gen accepted a --bin escaping the tree"
+fi
+if env "${golden_env[@]}" "$samosbor" gen --name br --repo https://example.com/x.git \
+     --preset go --branch 'bad..name' --render-to "$tmp/br" 2>/dev/null; then
+  fail "gen accepted an invalid --branch name"
 fi
 
 # --run-cmd already carries its own args — combining it with --run-args
@@ -272,6 +277,54 @@ mkdir -p "$XDG_CONFIG_HOME/systemd/user"
 [ ! -d "$state" ] || fail "smoke: purge left state"
 
 echo "smoke: OK"
+
+# ---------------------------------------------------------------- branch
+# --branch tracks a named branch instead of the remote default: commits on
+# the tracked branch are picked up, commits elsewhere are a no-op, and a
+# re-gen with a different --branch switches the clone on its next pull.
+borigin=$tmp/borigin
+mkdir -p "$borigin"
+"${G[@]}" -C "$borigin" init -q -b main
+printf 'cp payload braced\n' >"$borigin/build.sh"
+echo main-v1 >"$borigin/payload"
+"${G[@]}" -C "$borigin" add -A && "${G[@]}" -C "$borigin" commit -qm main1
+"${G[@]}" -C "$borigin" checkout -qb dev
+echo dev-v1 >"$borigin/payload"
+"${G[@]}" -C "$borigin" add -A && "${G[@]}" -C "$borigin" commit -qm dev1
+"${G[@]}" -C "$borigin" checkout -q main
+
+"$samosbor" gen --name braced --repo "$borigin" --branch dev \
+  --build-cmd 'sh build.sh' --bin braced 2>/dev/null
+bstate=$XDG_STATE_HOME/samosbor/braced
+grep -q dev-v1 "$bstate/current/braced" || fail "branch: clone did not track --branch"
+
+# a commit on the tracked branch is picked up...
+"${G[@]}" -C "$borigin" checkout -q dev
+echo dev-v2 >"$borigin/payload"
+"${G[@]}" -C "$borigin" add -A && "${G[@]}" -C "$borigin" commit -qm dev2
+"${G[@]}" -C "$borigin" checkout -q main
+"$samosbor" pull braced 2>/dev/null
+grep -q dev-v2 "$bstate/current/braced" || fail "branch: tracked-branch commit missed"
+
+# ...while a commit on main alone is a no-op for this project
+echo main-v2 >"$borigin/payload"
+"${G[@]}" -C "$borigin" add -A && "${G[@]}" -C "$borigin" commit -qm main2
+"$samosbor" pull braced 2>/dev/null
+grep -q 'result=unchanged' "$bstate/last-pull" || fail "branch: main commit bounced a dev tracker"
+grep -q dev-v2 "$bstate/current/braced" || fail "branch: artifact drifted off the branch"
+
+# re-gen onto main switches the clone on its (initial) pull
+"$samosbor" gen --name braced --repo "$borigin" --branch main \
+  --build-cmd 'sh build.sh' --bin braced 2>/dev/null
+grep -q main-v2 "$bstate/current/braced" || fail "branch: re-gen did not switch branches"
+
+# a branch missing on origin fails the pull loudly, artifact untouched
+if "$samosbor" gen --name braced --repo "$borigin" --branch nosuch \
+     --build-cmd 'sh build.sh' --bin braced 2>/dev/null; then
+  fail "branch: gen accepted a branch missing on origin"
+fi
+grep -q main-v2 "$bstate/current/braced" || fail "branch: failed switch touched the artifact"
+echo "branch: OK"
 
 # ---------------------------------------------------------------- go preset
 # Package default falls back to the repo root when cmd/<name> is absent.

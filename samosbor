@@ -58,9 +58,9 @@ mode_flag() { [ "$MODE" = system ] && echo " --system" || true; }
 # bash-sourceable file into the project state dir. regen/pull/list/uninstall
 # read it back — nothing is ever re-derived from the command line.
 manifest_reset() {
-  M_NAME= M_REPO= M_PRESET= M_PACKAGE= M_COMPONENT= M_ENTRYPOINT= M_PYTHON=
-  M_BUILD_CMD= M_BIN= M_RUN_CMD= M_RUN_ARGS= M_ENV_FILE= M_INSTALL_TO= M_CWD=
-  M_PULL_INTERVAL=5m M_VCS_STAMP=0 M_MODE=
+  M_NAME= M_REPO= M_BRANCH= M_PRESET= M_PACKAGE= M_COMPONENT= M_ENTRYPOINT=
+  M_PYTHON= M_BUILD_CMD= M_BIN= M_RUN_CMD= M_RUN_ARGS= M_ENV_FILE=
+  M_INSTALL_TO= M_CWD= M_PULL_INTERVAL=5m M_VCS_STAMP=0 M_MODE=
   M_CONFIGS=() M_ENVS=() M_PULL_ENVS=()
 }
 
@@ -98,6 +98,7 @@ write_manifest() {
     echo "# samosbor manifest — resolved gen arguments (regen reads this)"
     printf 'M_NAME=%q\n'          "$M_NAME"
     printf 'M_REPO=%q\n'          "$M_REPO"
+    printf 'M_BRANCH=%q\n'        "$M_BRANCH"
     printf 'M_PRESET=%q\n'        "$M_PRESET"
     printf 'M_PACKAGE=%q\n'       "$M_PACKAGE"
     printf 'M_COMPONENT=%q\n'     "$M_COMPONENT"
@@ -335,12 +336,25 @@ sync_src() {
   local src="$(state_dir)/src"
   if [ ! -d "$src/.git" ]; then
     info "initial clone of $M_REPO"
-    git clone --quiet -- "$M_REPO" "$src"
+    local bopt=()
+    if [ -n "$M_BRANCH" ]; then bopt=(--branch "$M_BRANCH"); fi
+    git clone --quiet ${bopt[@]+"${bopt[@]}"} -- "$M_REPO" "$src"
   else
     git -C "$src" fetch --prune --quiet
   fi
   local cur up
   cur=$(git -C "$src" rev-parse HEAD)
+  # The tracked branch is enforced on every pull, so a re-gen that changed
+  # --branch takes effect on the project's next pull. cur is captured above,
+  # before the switch: landing on the other branch counts as a change. A
+  # branch missing on origin fails the pull loudly — like a broken build,
+  # the old artifact keeps running and the noise goes to the journal.
+  if [ -n "$M_BRANCH" ] && \
+     [ "$(git -C "$src" symbolic-ref --quiet --short HEAD || true)" != "$M_BRANCH" ]; then
+    git -C "$src" rev-parse --verify --quiet "refs/remotes/origin/$M_BRANCH" >/dev/null \
+      || die "branch '$M_BRANCH' not found on origin ($M_REPO)"
+    git -C "$src" checkout --quiet -B "$M_BRANCH" --track "origin/$M_BRANCH"
+  fi
   up=$(git -C "$src" rev-parse '@{u}' 2>/dev/null || echo "$cur")
   SRC_CHANGED=1
   if [ "$cur" = "$up" ]; then SRC_CHANGED=0; fi
@@ -523,6 +537,9 @@ gen flags:
                             samosbor always works on its own pristine clone
                             (a relative path, incl. ., resolves against
                             your cwd at gen time)
+  --branch <name>           track this branch instead of the remote default;
+                            a re-gen with a different --branch switches the
+                            clone on the project's next pull
   --preset go|rust|haskell|python
                             build recipe (native out-of-tree)
     go:      --package <./cmd/x>   package to build (default ./cmd/<name>
@@ -657,6 +674,7 @@ cmd_gen() {
                               fi ;;
                        esac
                        shift 2 ;;
+      --branch)        M_BRANCH=$2; shift 2 ;;
       --preset)        M_PRESET=$2; shift 2 ;;
       --package)       M_PACKAGE=$2; shift 2 ;;
       --component)     M_COMPONENT=$2; shift 2 ;;
@@ -701,6 +719,12 @@ cmd_gen() {
   [ -n "$M_NAME" ] || die "gen: --name is required"
   [ -n "$M_REPO" ] || die "gen: --repo is required"
   check_name "$M_NAME"
+  # git's own ref grammar (bans whitespace, control bytes, .., leading -):
+  # the value feeds git command lines and the origin/<branch> ref.
+  if [ -n "$M_BRANCH" ]; then
+    git check-ref-format "refs/heads/$M_BRANCH" 2>/dev/null \
+      || die "gen: --branch '$M_BRANCH' is not a valid branch name"
+  fi
   if [ -n "$M_PRESET" ] && [ -n "$M_BUILD_CMD" ]; then
     die "gen: --preset and --build-cmd are mutually exclusive"
   fi
@@ -875,6 +899,7 @@ cmd_list() {
     fi
     printf '%s  (%s, --%s)\n' "$M_NAME" "${M_PRESET:-custom}" "$MODE"
     printf '  repo:      %s\n' "$M_REPO"
+    if [ -n "$M_BRANCH" ]; then printf '  branch:    %s\n' "$M_BRANCH"; fi
     printf '  service:   %s / %s\n' "$enabled" "$active"
     printf '  HEAD:      %s\n' "$head"
     printf '  artifact:  %s\n' "$([ "$M_PRESET" = python ] && echo "(venv)" || artifact_path)"

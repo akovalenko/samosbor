@@ -1,6 +1,7 @@
 # samosbor manifest — resolved gen arguments (regen reads this)
 M_NAME=webabs
 M_REPO=https://example.com/webabs.git
+M_BRANCH=''
 M_PRESET=python
 M_PACKAGE=''
 M_COMPONENT=''

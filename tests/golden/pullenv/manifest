@@ -1,6 +1,7 @@
 # samosbor manifest — resolved gen arguments (regen reads this)
 M_NAME=pullenv
 M_REPO=https://example.com/pullenv.git
+M_BRANCH=''
 M_PRESET=go
 M_PACKAGE=''
 M_COMPONENT=''

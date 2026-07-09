@@ -1,6 +1,7 @@
 # samosbor manifest — resolved gen arguments (regen reads this)
 M_NAME=legacy
 M_REPO=/srv/git/legacy
+M_BRANCH=stable
 M_PRESET=''
 M_PACKAGE=''
 M_COMPONENT=''

@@ -58,6 +58,11 @@ Root gets **no default flavor**: pass `--user` or `--system` explicitly.
    the explicit submodule dance (`sync --recursive`, `update --init
    --recursive --force`, `foreach clean`). Upstream force-push, amend,
    rebase — absorbed silently. The clone is samosbor's: never edit it.
+   It tracks the remote's default branch unless the project was generated
+   with `--branch <name>`; the branch is enforced on every pull, so a
+   re-gen with a different `--branch` switches the clone on the project's
+   next pull (a branch deleted upstream fails the pull loudly — the old
+   artifact keeps running).
 2. **Out-of-tree build.** Build *outputs* land under the project's state
    dir (`-o`, `--target-dir`, `--builddir`, the venv); toolchain *caches*
    stay the machine's own (go build cache, cargo registry, pip cache) —
