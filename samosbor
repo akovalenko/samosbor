@@ -550,7 +550,8 @@ gen flags:
                             gen time and hardcodes it — e.g. --env PATH gives
                             the daemon your PATH, not the systemd default;
                             regen keeps it, re-run gen to refresh
-  --pull-env <NAME|VALUE>   like --env but into the PULL/BUILD unit, not the
+  --pull-env <NAME|NAME=VALUE>
+                            like --env but into the PULL/BUILD unit, not the
                             daemon (same capture + literal forms, repeatable):
                             the home for build-time env — --pull-env PATH so
                             the timer build finds your toolchain (go/uv/…) and
