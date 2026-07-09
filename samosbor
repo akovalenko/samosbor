@@ -79,16 +79,16 @@ check_name() {
 # gets it hardcoded — pull runs from a timer with a minimal environment,
 # there is nothing to capture there); NAME=VALUE is taken literally.
 # regen keeps the captured value; re-run gen to refresh it.
-resolve_env() {
-  local spec=$1
+resolve_env() {  # $1=flag name, $2=spec
+  local flag=$1 spec=$2
   case $spec in
     *=*)
       [[ ${spec%%=*} =~ ^[A-Za-z_][A-Za-z0-9_]*$ ]] \
-        || die "gen: --env: bad variable name '${spec%%=*}'"
+        || die "gen: $flag: bad variable name '${spec%%=*}'"
       echo "$spec"; return 0 ;;
   esac
-  [[ $spec =~ ^[A-Za-z_][A-Za-z0-9_]*$ ]] || die "gen: --env: bad variable name '$spec'"
-  [ -n "${!spec+x}" ] || die "gen: --env $spec: not set in the current environment"
+  [[ $spec =~ ^[A-Za-z_][A-Za-z0-9_]*$ ]] || die "gen: $flag: bad variable name '$spec'"
+  [ -n "${!spec+x}" ] || die "gen: $flag $spec: not set in the current environment"
   echo "$spec=${!spec}"
 }
 
@@ -665,8 +665,8 @@ cmd_gen() {
       --build-cmd)     M_BUILD_CMD=$2; shift 2 ;;
       --bin)           M_BIN=$2; shift 2 ;;
       --config)        M_CONFIGS+=("$(resolve_gen_path --config "$2")"); shift 2 ;;
-      --env)           M_ENVS+=("$(resolve_env "$2")"); shift 2 ;;
-      --pull-env)      M_PULL_ENVS+=("$(resolve_env "$2")"); shift 2 ;;
+      --env)           M_ENVS+=("$(resolve_env --env "$2")"); shift 2 ;;
+      --pull-env)      M_PULL_ENVS+=("$(resolve_env --pull-env "$2")"); shift 2 ;;
       # systemd's optional-file dash survives: -/etc/x and -relative both work.
       --env-file) case $2 in
                     -*) M_ENV_FILE=-$(resolve_gen_path --env-file "${2#-}") ;;
