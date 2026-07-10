@@ -531,8 +531,10 @@ usage() {
 Usage:
   samosbor gen [flags]         stamp units + state for one project
   samosbor pull <name>         fetch/build/swap/restart (what the timer calls)
-  samosbor regen <name>|--all  restamp units from the saved manifest
-                               (preserves current enabled/active state)
+  samosbor regen <name>|--all  restamp units from the saved manifest;
+                               a unit whose text changed is try-restarted
+                               (stopped stays stopped, nothing is
+                               enabled or started)
   samosbor list [--terse]      the fleet, detailed by default; --terse:
                                one line per project
   samosbor uninstall <name> [--purge]
@@ -890,13 +892,32 @@ cmd_regen() {
     done
   fi
   [ "${#names[@]}" -gt 0 ] || die "regen: give a name or --all"
-  local n
+  # The same gentle contract as gen: snapshot the texts, restamp, and
+  # try-restart exactly the units whose text really changed — that is how
+  # a samosbor update propagates its new render to running units. The
+  # restarts run after the single daemon-reload, so they exec the new
+  # text; hand-stopped units stay stopped (try-restart skips inactive),
+  # nothing is enabled or started.
+  local n u changed=()
   for n in "${names[@]}"; do
     load_manifest "$n"
+    local -A before=()
+    for u in $(project_units); do
+      before[$u]=$([ -e "$UNIT_DIR/$u" ] && cksum <"$UNIT_DIR/$u" || echo absent)
+    done
     render_units "$UNIT_DIR"
+    for u in $(project_units); do
+      [ "${before[$u]}" = absent ] && continue
+      [ -e "$UNIT_DIR/$u" ] || continue
+      if [ "$(cksum <"$UNIT_DIR/$u")" != "${before[$u]}" ]; then changed+=("$u"); fi
+    done
     info "$n: units restamped"
   done
   sc daemon-reload
+  for u in ${changed[@]+"${changed[@]}"}; do
+    info "$u changed — try-restart"
+    sc try-restart "$u" || info "try-restart $u failed — check journalctl"
+  done
 }
 
 cmd_list() {

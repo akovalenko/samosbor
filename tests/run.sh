@@ -288,6 +288,22 @@ STAMP=shell-noise "$samosbor" pull stamped 2>/dev/null
 [ "$(cat "$sstate/current/stamped")" = v2 ] \
   || fail "pull-env: by-hand pull took shell env over the manifest"
 
+# regen restamps from the manifest and gently try-restarts exactly the
+# units whose text changed (an old render brought current by a samosbor
+# update); identical text bounces nothing.
+regen_out=$("$samosbor" regen smoked 2>&1)
+if grep -q try-restart <<<"$regen_out"; then
+  fail "regen: same-text regen restarted something"
+fi
+echo '# stale render' >>"$XDG_CONFIG_HOME/systemd/user/smoked.service"
+regen_out=$("$samosbor" regen smoked 2>&1)
+grep -q 'smoked.service changed — try-restart' <<<"$regen_out" \
+  || fail "regen: changed unit text not try-restarted"
+if grep -q 'pull.service changed\|pull.timer changed\|config.path changed\|config.service changed' \
+     <<<"$regen_out"; then
+  fail "regen: unchanged units restarted"
+fi
+
 # uninstall keeps state, --purge wipes it (unit dir is fake but exercised)
 mkdir -p "$XDG_CONFIG_HOME/systemd/user"
 "$samosbor" regen smoked 2>/dev/null

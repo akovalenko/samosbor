@@ -100,10 +100,11 @@ manifest slot: bring the project live with a plain re-gen or
 hand stays down while pulls keep the artifact fresh — the eventual
 manual start runs the newest build.
 
-`regen` restamps unit files from the manifest plus `daemon-reload`,
-and touches nothing else: no enable, no start, no restart. A running
-process keeps its old text until something restarts it; stopped stays
-stopped, disabled stays disabled.
+`regen` restamps unit files from the manifest, `daemon-reload`s, then
+gently try-restarts exactly the units whose text actually changed —
+that is how a samosbor update propagates its new render to running
+units. Identical text bounces nothing; stopped stays stopped, disabled
+stays disabled, and nothing is enabled or started.
 
 The service's `WorkingDirectory` defaults to the source clone for
 python and the project state dir otherwise — a least-surprise container
