@@ -483,6 +483,13 @@ do_pull() {  # $1=name, $2=initial (optional)
   # caches per-project: shared caches stay warm and are the toolchain's
   # own business to trim.
   export HOME=${HOME:-$(getent passwd "$(id -u)" | cut -d: -f6)}
+  # --pull-env applies on every pull path, not only the timer's: the pull
+  # unit carries the same values in Environment=, but the initial pull
+  # inside gen and a by-hand `samosbor pull` run in the caller's
+  # environment — export the manifest values so all three build alike.
+  # Before sync_src: GIT_SSH_COMMAND must reach the fetch too.
+  local pe
+  for pe in ${M_PULL_ENVS[@]+"${M_PULL_ENVS[@]}"}; do export "$pe"; done
 
   sync_src
   # Fast path: nothing new and an artifact is already installed.
@@ -500,6 +507,9 @@ do_pull() {  # $1=name, $2=initial (optional)
     return 1
   fi
   install_artifact
+  # On the initial pull the restart is gen's call, not ours: --no-start
+  # must leave unit state alone, and cmd_gen try-restarts after its
+  # daemon-reload when the artifact really changed.
   if [ "$RESTART" = 1 ] && [ -z "$initial" ]; then
     sc try-restart "$M_NAME.service" || info "try-restart failed — check journalctl"
   fi
@@ -568,14 +578,16 @@ gen flags:
                             the daemon your PATH, not the systemd default;
                             regen keeps it, re-run gen to refresh
   --pull-env <NAME|NAME=VALUE>
-                            like --env but into the PULL/BUILD unit, not the
+                            like --env but for the PULL/BUILD step, not the
                             daemon (same capture + literal forms, repeatable):
                             the home for build-time env — --pull-env PATH so
                             the timer build finds your toolchain (go/uv/…) and
                             an ancient system one can't shadow it,
                             GIT_SSH_COMMAND for a private fetch, GOPROXY. gen
                             warns when the preset toolchain resolves to a
-                            different binary on the unit's PATH than on yours
+                            different binary on the unit's PATH than on yours.
+                            Applies to every pull: the timer's, gen's initial
+                            build and a by-hand pull
   --env-file <path>         EnvironmentFile= for the service; watched too;
                             a leading - (optional file) survives
   --run-cmd <cmd>           override ExecStart (default: the artifact)
@@ -813,6 +825,18 @@ cmd_gen() {
       sc try-restart "$u" || info "try-restart $u failed — check journalctl"
     fi
   done
+  # The text loop cannot see an artifact-only change: the initial pull may
+  # have replaced the binary (a --pull-env changed the build, a re-gen
+  # switched --branch, upstream moved) while the service text stayed
+  # identical — without this the old binary keeps running until the next
+  # upstream commit. Skipped when the text loop already bounced the
+  # service (the fresh text re-execs the new binary anyway) and for a
+  # first gen (not yet active; enable --now below owns the start).
+  if [ "$RESTART" = 1 ] && [ "${before[$M_NAME.service]}" != absent ] \
+     && [ "$(cksum <"$UNIT_DIR/$M_NAME.service")" = "${before[$M_NAME.service]}" ]; then
+    info "artifact changed — try-restart"
+    sc try-restart "$M_NAME.service" || info "try-restart failed — check journalctl"
+  fi
   sc enable --now "$M_NAME-pull.timer" || info "enabling pull timer failed"
   if [ -e "$UNIT_DIR/$M_NAME-config.path" ]; then
     sc enable --now "$M_NAME-config.path" || true

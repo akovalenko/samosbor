@@ -264,6 +264,30 @@ golive_out=$("$samosbor" gen --name inert --repo "$origin" \
 grep -q 'enable --now inert.service' <<<"$golive_out" \
   || fail "smoke: plain re-gen after --no-start did not go live"
 
+# --pull-env reaches every pull path, not only the timer unit: gen's
+# initial pull builds with it (literal NAME=VALUE and bare-NAME capture
+# both), a re-gen whose new value changes the artifact try-restarts the
+# service even though no unit text changed, and a by-hand pull takes the
+# manifest value over ambient shell env.
+printf 'printf %%s "${STAMP:-none}" >stamped\nchmod +x stamped\n' >"$origin/build2.sh"
+"${G[@]}" -C "$origin" add -A && "${G[@]}" -C "$origin" commit -qm build2
+"$samosbor" gen --name stamped --repo "$origin" \
+  --build-cmd 'sh build2.sh' --bin stamped --pull-env STAMP=v1 2>/dev/null
+sstate=$XDG_STATE_HOME/samosbor/stamped
+[ "$(cat "$sstate/current/stamped")" = v1 ] \
+  || fail "pull-env: initial pull built without it"
+restamp_out=$(STAMP=v2 "$samosbor" gen --name stamped --repo "$origin" \
+  --build-cmd 'sh build2.sh' --bin stamped --pull-env STAMP 2>&1)
+[ "$(cat "$sstate/current/stamped")" = v2 ] \
+  || fail "pull-env: bare-NAME capture not applied on the initial pull"
+grep -q 'artifact changed — try-restart' <<<"$restamp_out" \
+  || fail "pull-env: changed artifact did not try-restart the service"
+echo tick >"$origin/tick"
+"${G[@]}" -C "$origin" add -A && "${G[@]}" -C "$origin" commit -qm tick
+STAMP=shell-noise "$samosbor" pull stamped 2>/dev/null
+[ "$(cat "$sstate/current/stamped")" = v2 ] \
+  || fail "pull-env: by-hand pull took shell env over the manifest"
+
 # uninstall keeps state, --purge wipes it (unit dir is fake but exercised)
 mkdir -p "$XDG_CONFIG_HOME/systemd/user"
 "$samosbor" regen smoked 2>/dev/null
